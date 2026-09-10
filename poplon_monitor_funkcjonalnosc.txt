@@ -1,0 +1,172 @@
+POPLON MONITOR — PODSUMOWANIE FUNKCJONALNOŚCI
+(stan na 2026-08-08)
+
+===============================================================================
+1. CEL APLIKACJI
+===============================================================================
+System do zdalnego (satelitarnego) monitorowania obowiązku utrzymania poplonu
+(międzyplonu) na działkach rolnych, zgodnie z wymogami programów rolno-
+-środowiskowych. Zastępuje/wspiera wizję terenową operatora — na podstawie
+danych satelitarnych ocenia, czy na działce faktycznie utrzymywana jest
+okrywa roślinna we wskazanym okresie, i klasyfikuje działki do trzech
+kategorii: zatwierdzone automatycznie (zielone), wymagające weryfikacji
+operatora (żółte) oraz z brakiem okrywy (czerwone).
+
+===============================================================================
+2. ARCHITEKTURA
+===============================================================================
+Backend: FastAPI (Python), moduły:
+  - app.py          — endpointy API, logika batch processing, orkiestracja
+  - core.py          — pobieranie geometrii działek (ULDK), szereg NDVI,
+                        ocena pojedynczego wskaźnika (check_parcel), progi
+                        jakości danych, okna czasowe wg typu poplonu
+  - analytics.py      — fuzja wielowskaźnikowa (EVI/SAVI/NDRE/NDWI + RVI/CR),
+                        Confidence Score, wagi zależne od fazy sezonu,
+                        detekcja zdarzeń agrotechnicznych (orka/likwidacja)
+  - sentinel1.py       — integracja z danymi radarowymi Sentinel-1 (SAR),
+                        retry/backoff i globalny limit współbieżności
+                        zapytań do Sentinel Hub
+  - calibration.py     — sugerowanie/rekalibracja wag wskaźników na
+                        podstawie danych historycznych
+  - scheduler.py       — zadania cykliczne (odświeżanie monitoringu)
+  - photo_handler.py   — weryfikacja zdjęć terenowych przesyłanych przez
+                        rolnika (analiza przez model AI, z timeoutem)
+  - db.py              — baza danych (działki monitorowane, alarmy, zdjęcia)
+  - auth.py            — lekka autoryzacja kluczem API dla endpointów
+                        modyfikujących dane
+  - notifier.py         — powiadomienia e-mail/SMS do operatora/rolnika
+
+Frontend: pojedynczy plik static/index.html — SPA w czystym JS (bez
+frameworka), wykresy przez Chart.js, wielojęzyczny interfejs (PL/EN/IT).
+
+===============================================================================
+3. GŁÓWNE FUNKCJONALNOŚCI
+===============================================================================
+
+3.1 Ocena pojedynczej działki (NDVI)
+  - Pobranie geometrii działki z ULDK po numerze.
+  - Pobranie szeregu czasowego NDVI z Sentinel Hub dla okna oceny zależnego
+    od typu poplonu (ozimy/jary) i dat siewu/likwidacji.
+  - Wyznaczenie statusu (OBECNY / PRAWDOPODOBNY / BRAK) na podstawie progów
+    NDVI oraz jakości danych (udział pikseli bez zachmurzenia — valid_frac).
+  - Wykrywanie zdarzeń: siew, likwidacja poplonu, terminy graniczne.
+
+3.2 Analiza wielowskaźnikowa i fuzja (check_multi)
+  - Dodatkowe wskaźniki optyczne: EVI, SAVI, NDRE, NDWI.
+  - Wskaźniki radarowe Sentinel-1: RVI, Cross-Ratio — niezależne od
+    zachmurzenia, uzupełniają braki danych optycznych.
+  - Confidence Score — ważona, znormalizowana ocena łącząca wszystkie
+    dostępne wskaźniki; wagi zależne od fazy sezonu (early/peak/winter)
+    i bliskości terminu likwidacji.
+  - Kara za ubóstwo danych (sparse_penalty) — wynik oparty na 1 wskaźniku
+    jest automatycznie obniżany (nie może "udawać" pełnej pewności), chyba
+    że to świadomy fallback czysto radarowy przy braku optyki.
+  - Wybór dnia szczytowego (peak_record) preferuje sceny o wiarygodnej
+    jakości danych (valid_frac ≥ próg); jeśli scena słabej jakości dałaby
+    wyższy wynik, jest pomijana na rzecz wiarygodnej — z jawnym pokazaniem
+    w UI "wynik bez wymogu wiarygodności" w nawiasie.
+  - Detekcja zdarzeń agrotechnicznych z fuzji optyka+radar (orka,
+    prawdopodobna orka, zdarzenie wykryte tylko radarowo).
+  - Sprawdzenie odzyskania okrywy po incydencie (post-event recovery) —
+    jeśli po wykrytym zdarzeniu kolejna obserwacja niezależnie potwierdza
+    wyraźną okrywę, incydent traktowany jako przejściowy i nie blokuje
+    pozytywnej decyzji.
+  - Korekta radarowa bramki jakości — gdy większość scen optycznych jest
+    słabej jakości, ale RVI niezależnie potwierdza okrywę, zatwierdzenie
+    nie jest wstrzymywane.
+  - Rozbieżność NDVI vs. wynik łączny jest wykrywana i oznaczana do
+    weryfikacji operatora (bez automatycznego nadpisywania wyniku).
+
+3.3 Kategoryzacja i decyzje
+  - Zielona (auto-zatwierdzona): status OBECNY + wysoka pewność (score ≥ 70),
+    brak wymogu zatwierdzenia operatora.
+  - Żółta: wymaga zatwierdzenia operatora (niska jakość danych, rozbieżność
+    wskaźników, wykryty incydent bez potwierdzonego odzyskania okrywy itp.).
+  - Czerwona: brak okrywy.
+  - Jawne "powody kategoryzacji" (category_reasons) wyświetlane na karcie
+    działki — operator od razu widzi, dlaczego dana działka nie jest
+    zielona (np. "większość scen słabej jakości 4/6", "wykryty incydent
+    2026-02-10", "pełna analiza niedostępna — kategoria wyłącznie z NDVI").
+
+3.4 Przetwarzanie wsadowe (batch)
+  - Import listy działek (np. z Excela) i uruchomienie oceny masowej.
+  - Równoległe przetwarzanie (ThreadPoolExecutor, konfigurowalna
+    współbieżność) z globalnym limitem zapytań do Sentinel Hub, by uniknąć
+    przekroczenia limitów API (błędy 429).
+  - Dla każdej działki: ocena NDVI i pełna analiza wielowskaźnikowa liczone
+    równolegle; wynik zawiera zarówno skrót (multi_summary), jak i PEŁNĄ
+    odpowiedź analizy (multi_full) — dzięki temu wejście w szczegóły działki
+    z listy wsadowej renderuje się natychmiast, bez ponownego przeliczania.
+  - Zdjęcie satelitarne true-color pomijane w trybie wsadowym (dociągane
+    on-demand dopiero po otwarciu szczegółów działki).
+  - Zarządzanie zadaniami: limit równoległych jobów, czas życia wyników,
+    czyszczenie po TTL.
+
+3.5 Panel szczegółów działki (frontend)
+  - Wykres NDVI/EVI/SAVI/NDRE/RVI z osobną osią dla radaru, wygładzanie
+    szumu RVI, przerwy w danych zamiast błędnej interpolacji przez długie
+    okresy bez obserwacji.
+  - Znaczniki zdarzeń na wykresie (siew, likwidacja, wykryte incydenty).
+  - Widget Confidence Score z rozbiciem na składowe wskaźniki (chipy),
+    etykietą jakości i notatką porównawczą (wynik z/bez wymogu
+    wiarygodnej sceny).
+  - Pasek/oszacowanie biomasy i CO2 jako zakres z zastrzeżeniem (brak
+    danych terenowych/zdjęciowych ogranicza precyzję modelu).
+  - Panel ekspercki z pełnymi danymi źródłowymi do audytu decyzji.
+  - Zdjęcie satelitarne true-color ładowane na żądanie (lazy).
+  - Manualne przełączanie kategorii przez operatora (nadpisanie werdyktu).
+
+3.6 Zdjęcia terenowe od rolnika (pętla weryfikacji)
+  - Rolnik przesyła zdjęcie potwierdzające obecność poplonu.
+  - Zdjęcie analizowane automatycznie (model AI, z timeoutem i obsługą
+    brakującego pliku), wynik zapisywany wraz z wartościami wskaźników.
+  - Zabezpieczenie przed podwójnym wysłaniem powiadomienia w pętli.
+
+3.7 Kalibracja i wagi wskaźników
+  - Moduł sugerowania nowych wag na podstawie danych historycznych
+    (kara za wskaźniki o potwierdzonej ujemnej separacji sygnału).
+  - Bezpieczne, atomowe przeładowanie wag w runtime bez restartu.
+  - Osobne zestawy wag dla faz sezonu (wczesna/szczyt/zima).
+
+3.8 Powiadomienia
+  - E-mail/SMS do operatora i/lub rolnika o statusie działki/alarmach.
+  - Treści powiadomień zabezpieczone przed wstrzyknięciem HTML.
+
+3.9 Bezpieczeństwo i stabilność
+  - Autoryzacja kluczem API dla endpointów zmieniających dane.
+  - Sanityzacja odpowiedzi błędów (500) — brak wycieku szczegółów
+    wewnętrznych.
+  - Zabezpieczenia przed XSS w renderowaniu kart działek i szczegółów.
+  - Retry/backoff oraz globalny semafor współbieżności dla wszystkich
+    wywołań Sentinel Hub (NDVI, multi-index, S1).
+  - Cache geometrii działek (TTL) — brak powtórnych zapytań ULDK dla tej
+    samej działki w krótkim czasie.
+  - Cache-Control na stronie głównej, by uniknąć serwowania nieaktualnej
+    wersji frontendu z przeglądarki.
+
+3.10 Testy
+  - Pakiet pytest (105 testów, wszystkie przechodzą) pokrywający: bramkę
+    jakości danych, korektę radarową, odzyskanie po incydencie, wybór dnia
+    szczytowego, karę za ubóstwo wskaźników, poprawność kategoryzacji
+    wielowskaźnikowej i regresje po każdej naprawionej usterce.
+
+===============================================================================
+4. OSTATNIO WPROWADZONE ULEPSZENIA (ten wątek roboczy)
+===============================================================================
+  - Naprawa bramki jakości valid_frac (nie blokowała już automatycznie,
+    tylko zgodnie z regułą większości/niejednoznaczności).
+  - Jawne "powody kategoryzacji" na kartach wsadowych.
+  - Zniesienie blokady operatora przy słabej jakości NDVI, gdy RVI
+    niezależnie potwierdza okrywę.
+  - Incydent nie blokuje pozytywnej decyzji, jeśli późniejsza obserwacja
+    potwierdza odzyskanie okrywy — naprawiono też błąd wyboru "pierwszego"
+    zamiast "najpóźniejszego" incydentu przy wielu zdarzeniach.
+  - Kara za wynik oparty na pojedynczym wskaźniku (sparse_penalty) —
+    usunięcie luki pozwalającej samemu NDVI "udawać" pełny wynik.
+  - Preferowanie wiarygodnych scen przy wyborze dnia szczytowego +
+    transparentność w UI (wynik alternatywny w nawiasie).
+  - Przeorganizowanie kolejności sekcji w check_multi, by komunikaty do
+    operatora się nie zaprzeczały.
+  - Cache pełnej analizy wielowskaźnikowej w wynikach wsadowych — karta
+    szczegółów działki otwiera się natychmiast, bez ponownego przeliczania
+    (bez wpływu na czas liczenia samego batcha).

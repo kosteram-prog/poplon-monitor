@@ -1,0 +1,3635 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weryfikacja poplonów · NDVI</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{
+  --bg:#F5F7F0; --panel:#FFFFFF; --ink:#1C3A0E; --muted:#5C7A4A;
+  --green:#2D6B1A; --green-deep:#1A4A0A; --green-light:#EAF3DC;
+  --soil:#8B5E2A; --soil-light:#F5ECD8;
+  --amber:#C47A2E; --amber-light:#FEF3E0;
+  --alert:#A83020; --alert-light:#FBEAE8;
+  --line:#C8D8B0; --focus:#2D6B1A;
+  --ndvi-grad:linear-gradient(90deg,#7A5230 0%,#C9A227 35%,#7FA34A 65%,#1A4A0A 100%);
+  --card-radius:12px; --input-bg:#F9FBF5;
+}
+*{box-sizing:border-box;margin:0}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font:15px/1.55 "Inter",system-ui,sans-serif}
+.mono{font-family:"IBM Plex Mono",monospace}
+header{background:var(--panel);border-bottom:2px solid var(--line);box-shadow:0 2px 8px rgba(44,90,26,.06)}
+.header-in{max-width:1200px;margin:0 auto;padding:16px 24px 12px}
+h1{font-family:"Archivo",sans-serif;font-weight:700;font-size:22px;letter-spacing:-.01em;color:var(--ink)}
+h1 span{color:var(--muted);font-weight:500}
+.ndvi-rule{height:5px;background:var(--ndvi-grad)}
+.tagline{color:var(--muted);font-size:13px;margin-top:3px}
+.tabs{max-width:1200px;margin:16px auto 0;padding:0 24px;display:flex;gap:6px}
+.tab-btn{padding:9px 18px;border:1.5px solid var(--line);background:var(--panel);
+  border-radius:10px 10px 0 0;border-bottom:none;font:600 13.5px "Inter",sans-serif;
+  color:var(--muted);cursor:pointer;position:relative;top:1px;transition:all .15s}
+.tab-btn:hover{background:var(--green-light);color:var(--green-deep)}
+.tab-btn.active{color:var(--green-deep);background:var(--bg);border-color:var(--line);border-bottom-color:var(--bg)}
+main{max-width:1200px;margin:0 auto;padding:22px 24px;display:grid;
+  grid-template-columns:380px 1fr;gap:20px;align-items:start}
+@media(max-width:880px){main{grid-template-columns:1fr}}
+.page-batch{max-width:1200px;margin:0 auto;padding:0 24px 22px;display:block}
+.card{background:var(--panel);border:1.5px solid var(--line);border-radius:var(--card-radius);
+  box-shadow:0 2px 10px rgba(44,90,26,.05)}
+.card-h{padding:12px 18px;border-bottom:1.5px solid var(--line);
+  font-family:"Archivo",sans-serif;font-weight:600;font-size:12px;
+  text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+  background:linear-gradient(180deg,#F9FBF5 0%,#FFFFFF 100%);
+  border-radius:var(--card-radius) var(--card-radius) 0 0}
+.card-b{padding:18px}
+label{display:block;font-size:12.5px;font-weight:600;margin:0 0 5px;color:var(--ink)}
+.hint{font-weight:400;color:var(--muted)}
+input[type=text],input[type=number],input[type=date],select,textarea{
+  width:100%;padding:9px 12px;border:1.5px solid var(--line);border-radius:8px;
+  font:inherit;background:var(--input-bg);color:var(--ink);transition:border-color .15s}
+.checkbox-row{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer;margin:0}
+.checkbox-row input{width:auto}
+input.mono{font-family:"IBM Plex Mono",monospace;font-size:13.5px}
+input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--focus);outline-offset:1px;border-color:var(--green)}
+.field{margin-bottom:14px}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.radio-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.radio-grid input{position:absolute;opacity:0}
+.radio-grid label{border:1.5px solid var(--line);border-radius:9px;padding:10px 12px;cursor:pointer;margin:0;background:var(--input-bg);transition:all .15s}
+.radio-grid label b{display:block;font-size:13.5px;color:var(--ink)}
+.radio-grid label small{color:var(--muted);font-weight:400;font-size:11.5px;line-height:1.3;display:block;margin-top:2px}
+.radio-grid input:checked+label{border-color:var(--green);background:var(--green-light);box-shadow:inset 0 0 0 1px var(--green)}
+.radio-grid input:focus-visible+label{outline:2px solid var(--focus)}
+button.primary{width:100%;padding:11px;border:0;border-radius:9px;
+  background:var(--green-deep);color:#fff;font:600 14.5px "Inter",sans-serif;
+  cursor:pointer;box-shadow:0 2px 6px rgba(26,74,10,.25);transition:all .15s;margin-top:4px}
+button.primary:hover{background:var(--green);box-shadow:0 4px 10px rgba(26,74,10,.3)}
+button.primary[disabled]{background:#8DAF80;cursor:wait;box-shadow:none}
+button.secondary{padding:8px 14px;border:1.5px solid var(--line);border-radius:8px;
+  background:var(--input-bg);color:var(--ink);font:600 13px "Inter",sans-serif;cursor:pointer;transition:all .15s}
+button.secondary:hover{background:var(--green-light);border-color:var(--green);color:var(--green-deep)}
+.error{display:none;margin-top:12px;padding:11px 14px;border-radius:9px;
+  background:var(--alert-light);border:1.5px solid #E8B0A0;color:#6A1C10;font-size:13.5px}
+#verdict{display:none;margin-top:20px;position:relative;overflow:hidden;
+  border-left:5px solid var(--v-edge,var(--green))}
+.v-status{font-family:"Archivo",sans-serif;font-weight:700;font-size:22px;letter-spacing:-.01em}
+.v-conf{font-size:12.5px;color:var(--muted);margin:2px 0 10px}
+.v-status.ok{color:var(--green-deep)} .v-status.no{color:var(--alert)}
+.v-status.maybe{color:var(--amber)} .v-status.unk{color:var(--muted)}
+.v-details{font-size:13.5px;color:var(--ink)}
+.v-details p{margin:0 0 6px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:12px}
+.chip{font-family:"IBM Plex Mono",monospace;font-size:12px;background:var(--green-light);
+  border:1px solid var(--line);border-radius:20px;padding:3px 10px;color:var(--green-deep)}
+.chip b{font-weight:500;color:var(--muted)}
+.warn{margin-top:10px;font-size:12.5px;color:var(--amber)}
+.parcel-meta{margin-top:12px;font-size:12.5px;color:var(--muted)}
+#map{height:340px;border-radius:0 0 10px 10px}
+.chart-wrap{padding:14px 16px 8px;height:340px}
+.legend{display:flex;flex-wrap:wrap;gap:14px;padding:0 16px 14px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.sw{width:14px;height:14px;border-radius:3px;display:inline-block}
+.right-col{display:flex;flex-direction:column;gap:20px}
+.placeholder{padding:60px 24px;text-align:center;color:var(--muted);font-size:14px}
+footer{max-width:1200px;margin:0 auto;padding:10px 24px 28px;color:var(--muted);font-size:12px;border-top:1px solid var(--line);margin-top:24px}
+#satImgHint{color:var(--muted);font-size:12px;background:var(--input-bg);border-top:1px solid var(--line)}
+p.hint{font-weight:400;color:var(--muted)}
+@media (prefers-reduced-motion: no-preference){
+  #verdict.show{animation:rise .35s ease}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1}}
+}
+.batch-table{width:100%;border-collapse:collapse;font-size:13px}
+.batch-table th{text-align:left;font-size:11px;text-transform:uppercase;
+  letter-spacing:.05em;color:var(--muted);padding:8px;border-bottom:1.5px solid var(--line);background:var(--input-bg)}
+.batch-table td{padding:4px 6px;vertical-align:middle}
+.batch-table input,.batch-table select{padding:6px 8px;font-size:13px}
+.batch-table input[type=number]{width:80px}
+.row-del{background:none;border:none;color:var(--alert);cursor:pointer;font-size:16px;padding:4px 8px;line-height:1}
+.batch-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap}
+.batch-actions button.primary{width:auto;flex:1;min-width:180px}
+.progress-bar{height:6px;background:var(--line);border-radius:3px;overflow:hidden;margin-top:12px}
+.progress-fill{height:100%;background:var(--green);width:0%;transition:width .3s;border-radius:3px}
+.progress-text{font-size:12.5px;color:var(--muted);margin-top:6px}
+.results-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:900px){.results-grid{grid-template-columns:1fr}}
+.result-col{border-radius:10px;padding:14px}
+.result-col h3{font-size:13.5px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;font-family:"Archivo",sans-serif}
+.result-col.green{background:var(--green-light);border:1.5px solid #B0D090}
+.result-col.yellow{background:var(--amber-light);border:1.5px solid #E8C890}
+.result-col.red{background:var(--alert-light);border:1.5px solid #E0A898}
+.result-col.errors{background:#F5F7F0;border:1.5px solid var(--line);margin-top:16px}
+.result-card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin-bottom:8px;font-size:12.5px}
+.result-card .rc-id{font-family:"IBM Plex Mono",monospace;font-weight:600;font-size:12.5px;color:var(--ink)}
+.result-card .rc-meta{color:var(--muted);margin:2px 0}
+.result-card .rc-status{font-weight:600;margin-bottom:4px}
+.result-card button.rc-link{background:none;border:none;color:var(--green-deep);font:600 12px "Inter",sans-serif;cursor:pointer;padding:0;text-decoration:underline}
+.empty-hint{color:var(--muted);font-size:12.5px}
+.page-monitor{max-width:1200px;margin:0 auto;padding:0 24px 32px}
+.monitor-card{background:var(--panel);border:1.5px solid var(--line);border-radius:10px;padding:14px 16px;margin-bottom:12px;box-shadow:0 1px 6px rgba(44,90,26,.04)}
+.monitor-card-head{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+.status-badge{font-size:11px;font-weight:600;padding:2px 10px;border-radius:12px}
+.status-active{background:var(--green-light);color:var(--green-deep)}
+.status-alarm{background:var(--alert-light);color:var(--alert)}
+.status-completed{background:#F0F4EC;color:var(--muted)}
+.alarm-banner{background:var(--alert-light);border:1.5px solid #E0A898;border-radius:8px;padding:8px 12px;margin-top:8px;font-size:12.5px;display:flex;justify-content:space-between;align-items:center;gap:8px}
+.sparkline-wrap{margin:8px 0}
+.monitor-meta{font-size:12px;color:var(--muted);margin-bottom:4px}
+.monitor-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.monitor-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:760px){.monitor-grid{grid-template-columns:1fr}}
+
+/* ── Confidence Score ─────────────────────────────────── */
+.cs-wrap{margin-bottom:14px;padding:12px 14px;background:var(--green-light);
+  border:1.5px solid var(--line);border-radius:10px}
+.cs-row{display:flex;align-items:center;gap:12px}
+.cs-ring{position:relative;width:56px;height:56px;flex-shrink:0}
+.cs-ring svg{transform:rotate(-90deg)}
+.cs-ring-num{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;font-family:"Archivo",sans-serif;font-weight:700;
+  font-size:14px;color:var(--ink)}
+.cs-label{font-size:13px;font-weight:600;color:var(--ink)}
+.cs-sublabel{font-size:11.5px;color:var(--muted);margin-top:2px}
+.cs-bar-wrap{flex:1;min-width:0}
+.cs-bar-track{height:8px;background:#D8E8CC;border-radius:4px;overflow:hidden;margin-bottom:4px}
+.cs-bar-fill{height:100%;border-radius:4px;transition:width .6s ease}
+.cs-grade{display:inline-block;font-family:"Archivo",sans-serif;font-weight:700;
+  font-size:18px;line-height:1;color:var(--green-deep)}
+.cs-loading{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:6px}
+.cs-spinner{width:14px;height:14px;border:2px solid var(--line);
+  border-top-color:var(--green);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* ── Indeksy dodatkowe (chips szerokie) ─────────────── */
+.idx-row{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.idx-chip{font-family:"IBM Plex Mono",monospace;font-size:11.5px;padding:3px 9px;
+  border-radius:16px;border:1px solid var(--line);cursor:default}
+.idx-chip.good{background:#EAF3DC;border-color:#B0D090;color:var(--green-deep)}
+.idx-chip.mid {background:#FEF3E0;border-color:#E8C890;color:#7A5000}
+.idx-chip.bad {background:#FBEAE8;border-color:#E0A898;color:var(--alert)}
+.idx-chip.na  {background:#F5F7F0;border-color:var(--line);color:var(--muted)}
+
+/* ── Panel eksperta ─────────────────────────────────── */
+.expert-toggle{display:flex;align-items:center;gap:6px;cursor:pointer;
+  font-size:12px;font-weight:600;color:var(--muted);margin-top:10px;
+  background:none;border:none;padding:0}
+.expert-toggle:hover{color:var(--ink)}
+.expert-toggle .arrow{transition:transform .2s;display:inline-block}
+.expert-toggle.open .arrow{transform:rotate(90deg)}
+.expert-panel{display:none;margin-top:12px;border-top:1px dashed var(--line);
+  padding-top:12px}
+.expert-panel.open{display:block}
+.expert-chart-wrap{position:relative;height:220px;margin-bottom:8px}
+.layer-toggles{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+.layer-btn{padding:3px 10px;border-radius:14px;border:1.5px solid var(--line);
+  background:var(--input-bg);font-size:11px;font-weight:600;cursor:pointer;
+  transition:all .15s;color:var(--muted)}
+.layer-btn.on{color:#fff;border-color:transparent}
+
+/* ── Zdarzenia agrotechniczne ────────────────────────── */
+.agro-event{margin-top:8px;padding:8px 11px;border-radius:7px;font-size:12.5px;
+  display:flex;gap:10px;align-items:flex-start}
+.agro-event.high{background:#FBEAE8;border:1px solid #E0A898}
+.agro-event.medium{background:#FEF3E0;border:1px solid #E8C890}
+.agro-event.declared{background:#EAF3DC;border:1px solid #B0D090}
+.agro-event-icon{font-size:16px;flex-shrink:0;margin-top:1px}
+.agro-event-body{flex:1}
+.agro-event-date{font-family:"IBM Plex Mono",monospace;font-size:11px;color:var(--muted)}
+.btn-insar{margin-top:7px;padding:4px 10px;font-size:11.5px;border-radius:6px;
+  border:1px solid #9C8CC0;background:#F1EDF8;color:#4A3B7A;cursor:pointer}
+.btn-insar:hover{background:#E5DEF2}
+.btn-insar:disabled{opacity:.55;cursor:default}
+.insar-result{display:none;margin-top:6px;font-size:12px;line-height:1.4}
+
+/* ── Biomasa ─────────────────────────────────────────── */
+.biomass-strip{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;
+  padding:8px 12px;background:#F5F7F0;border-radius:8px}
+.biomass-kpi{text-align:center}
+.biomass-val{font-family:"Archivo",sans-serif;font-weight:700;font-size:20px;
+  color:var(--green-deep)}
+.biomass-lbl{font-size:10.5px;color:var(--muted)}
+.biomass-strip{flex-direction:column}
+.biomass-kpis{display:flex;gap:16px;flex-wrap:wrap}
+.biomass-caveat{font-size:10.5px;color:var(--muted);line-height:1.4;
+  border-top:1px solid #E2E6DA;padding-top:6px;margin-top:2px}
+
+/* ── Progresywne ładowanie ───────────────────────────── */
+.multi-loading{display:none;margin-top:8px;padding:8px 12px;
+  background:#F5F7F0;border-radius:7px;font-size:12px;color:var(--muted);
+  display:none;align-items:center;gap:8px}
+.multi-loading.active{display:flex}
+</style>
+</head>
+<body>
+<header>
+  <div class="header-in" style="display:flex;justify-content:space-between;align-items:flex-start">
+    <div>
+      <h1 data-i18n="app_title">Weryfikacja poplonów <span>· Sentinel-2 NDVI</span></h1>
+      <p class="tagline" data-i18n="app_tagline">Działka ewidencyjna → przebieg wegetacji z satelity → ocena, czy poplon faktycznie rósł</p>
+    </div>
+    <button id="langBtn" onclick="toggleLang()" style="
+      margin-top:6px;padding:5px 12px;border:1px solid var(--line);
+      border-radius:20px;background:var(--green-deep);color:#fff;
+      font:600 12px 'Inter',sans-serif;cursor:pointer;white-space:nowrap;
+      letter-spacing:.02em;flex-shrink:0">🌐 EN</button>
+  </div>
+  <div class="ndvi-rule" aria-hidden="true"></div>
+</header>
+
+<div class="tabs">
+  <button class="tab-btn active" data-mode="single" id="tabSingle" data-i18n="tab_single">Pojedyncza działka</button>
+  <button class="tab-btn" data-mode="batch" id="tabBatch" data-i18n="tab_batch">Wiele działek naraz</button>
+  <button class="tab-btn" data-mode="monitor" id="tabMonitor" data-i18n="tab_monitor">Monitoring sezonu</button>
+</div>
+
+<!-- ====================== TRYB: POJEDYNCZA DZIAŁKA ====================== -->
+<main id="viewSingle">
+  <div>
+    <section class="card">
+      <div class="card-h">Dane do weryfikacji</div>
+      <div class="card-b">
+        <form id="form">
+          <div class="field">
+            <label for="pid">Identyfikator działki <span class="hint">(TERYT)</span></label>
+            <input class="mono" type="text" id="pid" required
+              placeholder="np. 141201_1.0001.6509" autocomplete="off">
+          </div>
+          <div class="field">
+            <label>Rodzaj poplonu</label>
+            <div class="radio-grid" role="radiogroup">
+              <input type="radio" name="typ" id="t1" value="scierniskowy" checked>
+              <label for="t1"><b>Ścierniskowy</b><small>letni · ocena wrzesień–połowa października</small></label>
+              <input type="radio" name="typ" id="t2" value="ozimy">
+              <label for="t2"><b>Ozimy</b><small>ocena jesień + okrywa do połowy lutego</small></label>
+            </div>
+          </div>
+          <div class="row2 field">
+            <div>
+              <label for="rok">Rok siewu</label>
+              <input type="number" id="rok" min="2016" max="2100" required>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="sowDateSingle">Data siewu <span class="hint">(opcjonalnie)</span></label>
+            <input type="date" id="sowDateSingle">
+          </div>
+          <div class="field">
+            <label for="singleFarmerPhone" id="lbl_single_phone">Tel. rolnika <span class="hint">(opcjonalnie, do SMS)</span></label>
+            <input type="tel" id="singleFarmerPhone" placeholder="+48600000000">
+          </div>
+
+          <div class="field">
+            <label class="checkbox-row" for="hasTermination">
+              <input type="checkbox" id="hasTermination">
+              Poplon został zlikwidowany przed końcem oceny
+            </label>
+          </div>
+          <div id="terminationFields" class="row2 field" style="display:none">
+            <div>
+              <label for="termDate">Data likwidacji</label>
+              <input type="date" id="termDate">
+            </div>
+            <div>
+              <label for="termMethod">Sposób likwidacji</label>
+              <select id="termMethod">
+                <option value="walowanie">Wałowanie</option>
+                <option value="talerzowanie">Lekkie talerzowanie</option>
+                <option value="przyoranie">Przyoranie</option>
+                <option value="oprysk">Oprysk herbicydem</option>
+                <option value="inne">Inny sposób</option>
+              </select>
+            </div>
+          </div>
+
+          <button class="primary" id="go" type="submit">Sprawdź działkę</button>
+        </form>
+        <div class="error" id="err" role="alert"></div>
+      </div>
+    </section>
+
+    <section class="card" id="verdict" aria-live="polite">
+      <div class="card-b">
+        <div id="backToBatch" style="display:none;margin-bottom:14px;
+          display:none;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <button class="secondary" style="font-size:12px" type="button"
+            onclick="returnToBatch()" id="btnBackBatch">← Wróć do wyników</button>
+          <!-- Widget ręcznej zmiany kategorii — widoczny gdy przyszliśmy z trybu wsadowego -->
+          <div id="manualCatWidget" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span style="font-size:11px;color:var(--muted);font-weight:600" id="manualCatLabel">Zmień kategorię:</span>
+            <button type="button" onclick="setManualCategory('green')" id="manCatGreen"
+              style="padding:4px 12px;border-radius:20px;border:1.5px solid #B0D090;
+              background:#EAF3DC;color:#1A4A0A;font-size:11.5px;font-weight:600;cursor:pointer">
+              🟢 <span id="manCatGreenLbl">OK</span></button>
+            <button type="button" onclick="setManualCategory('yellow')" id="manCatYellow"
+              style="padding:4px 12px;border-radius:20px;border:1.5px solid #E8C890;
+              background:#FEF3E0;color:#7A5000;font-size:11.5px;font-weight:600;cursor:pointer">
+              🟡 <span id="manCatYellowLbl">Do agronoma</span></button>
+            <button type="button" onclick="setManualCategory('red')" id="manCatRed"
+              style="padding:4px 12px;border-radius:20px;border:1.5px solid #E0A898;
+              background:#FBEAE8;color:#6A1C10;font-size:11.5px;font-weight:600;cursor:pointer">
+              🔴 <span id="manCatRedLbl">Odrzucone</span></button>
+          </div>
+        </div>
+        <!-- Widget SMS — widoczny tylko dla żółtej kategorii gdy przyszliśmy z wsadowego -->
+        <div id="smsWidget" style="display:none;margin-bottom:12px;padding:12px 14px;
+          background:#FBF3E0;border:1.5px solid #E8C890;border-radius:9px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:13px;font-weight:600;color:#7A5000">📱</span>
+            <span id="smsWidgetLabel" style="font-size:12.5px;font-weight:600;color:#7A5000">Wyślij SMS do rolnika z prośbą o zdjęcie</span>
+          </div>
+          <textarea id="smsText" rows="3" style="width:100%;border:1.5px solid #E8C890;
+            border-radius:7px;padding:8px 10px;font:13px 'Inter',sans-serif;
+            background:#FFFDF5;color:var(--ink);resize:vertical"></textarea>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-top:8px;gap:8px;flex-wrap:wrap">
+            <span id="smsCharCount" style="font-size:11px;color:var(--muted)">0 / 160</span>
+            <button type="button" id="smsSendBtn" onclick="sendSmsFromVerdict()"
+              style="padding:7px 16px;border:0;border-radius:7px;
+              background:#C47A2E;color:#fff;font:600 12.5px 'Inter',sans-serif;
+              cursor:pointer;display:flex;align-items:center;gap:6px">
+              📤 <span id="smsSendLabel">Wyślij SMS</span>
+            </button>
+          </div>
+          <div id="smsFeedback" style="display:none;margin-top:6px;font-size:12px;color:var(--green-deep)"></div>
+        </div>
+        <div id="manualCatFlash" style="font-size:11px;color:var(--green-deep);font-weight:600;
+          opacity:0;transition:opacity .3s;height:14px;margin-bottom:4px"></div>
+
+        <!-- Confidence Score -->
+        <div id="csWrap" class="cs-wrap" style="display:none">
+          <div class="cs-row">
+            <div class="cs-ring">
+              <svg width="56" height="56" viewBox="0 0 56 56">
+                <circle cx="28" cy="28" r="23" fill="none" stroke="#D8E8CC" stroke-width="5"/>
+                <circle id="csArc" cx="28" cy="28" r="23" fill="none"
+                  stroke="#2D6B1A" stroke-width="5"
+                  stroke-dasharray="144.5" stroke-dashoffset="144.5"
+                  stroke-linecap="round" style="transition:stroke-dashoffset .7s ease"/>
+              </svg>
+              <div class="cs-ring-num" id="csNum">—</div>
+            </div>
+            <div class="cs-bar-wrap">
+              <div style="display:flex;justify-content:space-between;align-items:baseline">
+                <span class="cs-grade" id="csGrade">—</span>
+                <span class="cs-loading" id="csLoading" style="display:none">
+                  <span class="cs-spinner"></span>
+                  <span id="csLoadingTxt">Ładuję dane multi-spektralne…</span>
+                </span>
+              </div>
+              <div class="cs-bar-track"><div class="cs-bar-fill" id="csBarFill" style="width:0%"></div></div>
+              <div class="cs-sublabel" id="csLabel">Pewność poplonu</div>
+              <div class="cs-sublabel" id="csRangeNote" style="display:none;font-size:10px;color:var(--muted);margin-top:1px"
+                title="Zakres wynikający z jakości i kompletności danych (mniej niezależnych wskaźników / gorsza jakość sceny = szerszy zakres). To NIE jest statystyczny przedział ufności."></div>
+              <div class="cs-sublabel" id="csAltNote" style="display:none;font-size:10px;color:var(--muted);margin-top:1px"></div>
+            </div>
+          </div>
+          <!-- Chipy wskaźników -->
+          <div class="idx-row" id="idxChips"></div>
+          <!-- Biomasa -->
+          <div id="biomassStrip" class="biomass-strip" style="display:none">
+            <div class="biomass-kpis">
+              <div class="biomass-kpi">
+                <div class="biomass-val" id="bioVal">—</div>
+                <div class="biomass-lbl" id="bioLbl">t s.m./ha</div>
+              </div>
+              <div class="biomass-kpi">
+                <div class="biomass-val" id="co2Val">—</div>
+                <div class="biomass-lbl" id="co2Lbl">t CO₂eq/ha</div>
+              </div>
+            </div>
+            <div class="biomass-caveat" id="bioCaveat"></div>
+          </div>
+          <!-- Zdarzenia agrotechniczne -->
+          <div id="agroEvents"></div>
+          <!-- Warunki wzrostu / teren (informacyjne) -->
+          <div id="growingCondStrip" class="biomass-strip" style="display:none">
+            <div class="biomass-kpis" id="growingCondKpis"></div>
+            <div class="biomass-caveat" id="growingCondCaveat"></div>
+          </div>
+        </div>
+        <div id="csErrNote" style="display:none;margin:6px 0 4px;font-size:12px;
+          color:var(--muted, #7a8570);font-style:italic"></div>
+
+        <div class="v-status" id="v-status"></div>
+        <div class="v-conf" id="v-conf"></div>
+        <div id="v-low-quality" style="display:none;margin:8px 0;padding:10px 13px;
+          background:#FBF3E1;border:1px solid #E7CE99;border-radius:7px;
+          font-size:13px;color:var(--amber)"></div>
+        <div class="v-details" id="v-details"></div>
+        <div class="chips" id="v-chips"></div>
+        <div class="warn" id="v-warn"></div>
+        <div class="parcel-meta" id="v-meta"></div>
+
+        <div id="pdfExportWrap" style="display:none;margin:6px 0">
+          <button type="button" onclick="_exportParcelPdf(this)"
+            style="padding:5px 12px;border:1.5px solid var(--line);border-radius:7px;
+            background:var(--input-bg);color:var(--ink);font:600 11.5px 'Inter',sans-serif;
+            cursor:pointer;display:flex;align-items:center;gap:5px">
+            📄 <span>Eksportuj PDF</span>
+          </button>
+        </div>
+
+        <!-- Panel eksperta -->
+        <button class="expert-toggle" id="expertToggle" style="display:none"
+          onclick="toggleExpert()">
+          <span class="arrow">▶</span>
+          <span id="expertToggleLbl">Panel eksperta — indeksy szczegółowe</span>
+        </button>
+        <div class="expert-panel" id="expertPanel">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+            <span style="font-size:11px;font-weight:600;color:var(--muted)" id="expertLayerLbl">Warstwy:</span>
+            <div class="layer-toggles" id="layerToggles"></div>
+          </div>
+          <div class="expert-chart-wrap">
+            <canvas id="expertChart"></canvas>
+          </div>
+          <div style="font-size:11px;color:var(--muted);margin-top:4px" id="expertHint">
+            Lewa oś Y: indeksy optyczne [0–1] · Prawa oś Y: radar VV/VH [dB]
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="right-col">
+    <section class="card">
+      <div class="card-h">Działka na ortofotomapie</div>
+      <div id="map" role="img" aria-label="Mapa z konturem działki">
+        <div class="placeholder" id="map-ph">Kontur działki pojawi się po sprawdzeniu</div>
+      </div>
+      <div id="satImgHint" style="display:none;padding:10px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)"></div>
+    </section>
+    <section class="card">
+      <div class="card-h">Przebieg NDVI</div>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+      <div class="legend" id="chartLegend">
+        <span><i class="sw" style="background:#2D6B1A"></i><span data-leg="leg_ndvi">NDVI — sceny wiarygodne</span></span>
+        <span><i class="sw" style="background:#B9C2B5"></i><span data-leg="leg_cloudy">sceny zachmurzone (pominięte w ocenie)</span></span>
+        <span><i class="sw" style="background:#EAD9C4"></i><span data-leg="leg_baseline">okno bazowe (ściernisko)</span></span>
+        <span><i class="sw" style="background:#D5E8D2"></i><span data-leg="leg_cover">okno oceny okrywy</span></span>
+        <span><i class="sw" style="background:#D6E4F0"></i><span data-leg="leg_winter">okno zimowe</span></span>
+      </div>
+      <div class="legend" id="chartLegendMulti"></div>
+    </section>
+  </div>
+</main>
+
+<!-- ====================== TRYB: WIELE DZIAŁEK NARAZ ====================== -->
+<div class="page-batch" id="viewBatch" style="display:none">
+
+  <section class="card" style="margin-bottom:16px">
+    <div class="card-h">Wgraj plik (Excel .xlsx/.xls lub .csv)</div>
+    <div class="card-b">
+      <input type="file" id="xlsxFile" accept=".xlsx,.xls,.csv">
+      <p class="hint" style="margin-top:8px">
+        Rozpoznawane kolumny (dowolna kolejność, wielkość liter bez znaczenia):
+        <b>ID działki</b> (np. "działka", "nr działki", "TERYT") i
+        <b>rodzaj poplonu</b> ("poplon", "rodzaj", "typ" — wartości typu
+        "ścierniskowy/letni" lub "ozimy/zimowy" rozpoznawane automatycznie),
+        opcjonalnie <b>rok</b>, <b>data siewu</b>, <b>data likwidacji</b> i
+        <b>sposób likwidacji</b>. Po wczytaniu wszystko możesz poprawić ręcznie poniżej.
+      </p>
+    </div>
+  </section>
+
+  <section class="card" style="margin-bottom:16px">
+    <div class="card-h">Działki do sprawdzenia <span id="rowCount" class="hint"></span></div>
+    <div class="card-b">
+      <div style="overflow-x:auto">
+        <table class="batch-table" id="batchTable">
+          <thead>
+            <tr><th>ID działki</th><th>Rodzaj</th><th>Rok</th><th>Data siewu</th>
+                <th>Likwidacja — data</th><th>Likwidacja — sposób</th><th></th></tr>
+          </thead>
+          <tbody id="batchTbody"></tbody>
+        </table>
+      </div>
+      <div class="batch-actions">
+        <button type="button" class="secondary" id="addRow">+ Dodaj wiersz</button>
+        <button type="button" class="primary" id="runBatch">Sprawdź wszystkie działki</button>
+      </div>
+      <div class="progress-bar" id="progressBarWrap" style="display:none">
+        <div class="progress-fill" id="progressFill"></div>
+      </div>
+      <div class="progress-text" id="batchProgress"></div>
+      <div class="error" id="batchErr"></div>
+    </div>
+  </section>
+
+  <section class="card" id="batchResults" style="display:none">
+    <div class="card-h" id="card_results_h"
+      style="display:flex;justify-content:space-between;align-items:center">
+      <span>Wyniki</span>
+      <button type="button" onclick="exportResults()"
+        style="padding:5px 12px;border:1.5px solid var(--line);border-radius:7px;
+        background:var(--input-bg);color:var(--ink);font:600 11.5px 'Inter',sans-serif;
+        cursor:pointer;display:flex;align-items:center;gap:5px">
+        📥 <span id="btnExportLbl">Eksportuj</span>
+      </button>
+    </div>
+    <div class="card-b">
+      <div class="results-grid">
+        <div class="result-col green">
+          <h3>🟢 OK <span id="cntGreen">0</span></h3>
+          <div id="listGreen"><p class="empty-hint">—</p></div>
+        </div>
+        <div class="result-col yellow">
+          <h3>🟡 Do interpretacji agronoma <span id="cntYellow">0</span></h3>
+          <div id="listYellow"><p class="empty-hint">—</p></div>
+        </div>
+        <div class="result-col red">
+          <h3>🔴 Odrzucone <span id="cntRed">0</span></h3>
+          <div id="listRed"><p class="empty-hint">—</p></div>
+        </div>
+      </div>
+      <div class="result-col errors" id="errorsBlock" style="display:none">
+        <h3>⚠ Błędy danych (nie ocena agronomiczna) <span id="cntError">0</span></h3>
+        <div id="listError"></div>
+      </div>
+    </div>
+  </section>
+
+</div>
+
+<footer>Dane: Sentinel-2 L2A (Copernicus Data Space Ecosystem), geometrie działek: ULDK GUGiK,
+podkład: ortofotomapa Geoportal. Wynik ma charakter poglądowy — nie zastępuje kontroli na miejscu.</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+document.getElementById('rok').value = (function(){
+  const now = new Date();
+  return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+})();
+
+/* ============================== ZAKŁADKI ============================== */
+document.getElementById('tabSingle').addEventListener('click', () => switchTab('single'));
+document.getElementById('tabBatch').addEventListener('click', () => switchTab('batch'));
+function switchTab(mode){
+  document.getElementById('tabSingle').classList.toggle('active', mode === 'single');
+  document.getElementById('tabBatch').classList.toggle('active', mode === 'batch');
+  document.getElementById('viewSingle').style.display = mode === 'single' ? 'grid' : 'none';
+  document.getElementById('viewBatch').style.display = mode === 'batch' ? 'block' : 'none';
+}
+
+document.getElementById('hasTermination').addEventListener('change', e => {
+  document.getElementById('terminationFields').style.display = e.target.checked ? 'grid' : 'none';
+});
+
+/* ============================== MAPA / WYKRES (wspólne) ================ */
+let map = null, parcelLayer = null, chart = null, layerControl = null, satImageLayer = null;
+
+function initMap(){
+  map = L.map('map', {scrollWheelZoom:false});
+  const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:19, attribution:'© OpenStreetMap'});
+  const orto = L.tileLayer.wms(
+    'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMS/StandardResolution',
+    {layers:'Raster', format:'image/jpeg', maxZoom:20,
+     attribution:'Ortofotomapa © GUGiK'});
+  orto.addTo(map);
+  layerControl = L.control.layers({'Ortofotomapa':orto,'OpenStreetMap':osm}, {}).addTo(map);
+  map.setView([52.1,19.3],6);
+}
+
+/* Pokazuje/aktualizuje warstwę ze zdjęciem satelitarnym z dnia szczytu NDVI
+ * w menu warstw na mapie (obok Ortofotomapy/OpenStreetMap). */
+function showSatelliteImage(res){
+  if(satImageLayer){
+    map.removeLayer(satImageLayer);
+    layerControl.removeLayer(satImageLayer);
+    satImageLayer = null;
+  }
+  const hint = document.getElementById('satImgHint');
+  const img = res.satellite_image;
+  if(!img){
+    hint.style.display = 'none';
+    return;
+  }
+  const b = img.bbox; // [minLon, minLat, maxLon, maxLat]
+  const bounds = L.latLngBounds([[b[1], b[0]], [b[3], b[2]]]);
+  satImageLayer = L.imageOverlay(`data:image/png;base64,${img.png_base64}`, bounds, {opacity:1});
+  satImageLayer.addTo(map);
+  layerControl.addOverlay(satImageLayer, `Zdjęcie satelitarne (${img.date})`);
+  hint.style.display = 'block';
+  hint.innerHTML = `🛰️ ${t('sat_hint_prefix')}<b>${img.date}</b>${t('sat_hint_suffix')}`;
+}
+
+/* Wyniki wsadowe (batch) celowo nie ciągną zdjęcia satelitarnego dla każdej
+ * działki (patrz core.check_parcel fetch_image=False) — to jest 4. sekwencyjny
+ * call do Sentinel Hub, niepotrzebny dopóki operator nie otworzy szczegółów.
+ * Ta funkcja dociąga je on-demand dopiero przy wejściu w podgląd działki. */
+async function showSatelliteImageLazy(res){
+  if(res.satellite_image || !res.verdict || !res.verdict.peak_date){
+    showSatelliteImage(res);
+    return;
+  }
+  showSatelliteImage(res); // na razie ukryj warstwę, trwa dociąganie
+  try{
+    const r = await fetch('/api/satellite_image', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({parcel_id: res.parcel.id, date: res.verdict.peak_date})});
+    if(r.ok){
+      res.satellite_image = await r.json();
+      showSatelliteImage(res);
+    }
+  }catch(e){ /* brak zdjęcia nie blokuje widoku działki */ }
+}
+
+const STATUS_DEF = {
+  'OBECNY':            {cls:'ok',    edge:'#1A4A0A'},
+  'PRAWDOPODOBNY':     {cls:'maybe', edge:'#A87716'},
+  'BRAK':              {cls:'no',    edge:'#A83020'},
+  'NIEROZSTRZYGNIETE': {cls:'unk',   edge:'#8B948C'},
+};
+function STATUS(key){
+  const def = STATUS_DEF[key] || STATUS_DEF['NIEROZSTRZYGNIETE'];
+  return { ...def, label: t('status_'+key) || key };
+}
+
+const windowShade = {
+  id:'windowShade',
+  beforeDraw(c, args, opts){
+    const {ctx, chartArea, scales:{x}} = c;
+    if(!opts.windows) return;
+    const colors = {baseline:'#EAD9C4', cover:'#D5E8D2', winter:'#D6E4F0'};
+    ctx.save();
+    for(const [name,[a,b]] of Object.entries(opts.windows)){
+      const x1 = Math.max(x.getPixelForValue(new Date(a)), chartArea.left);
+      const x2 = Math.min(x.getPixelForValue(new Date(b)), chartArea.right);
+      if(x2 <= x1) continue;
+      ctx.fillStyle = colors[name] || '#eee';
+      ctx.globalAlpha = .55;
+      ctx.fillRect(x1, chartArea.top, x2-x1, chartArea.bottom-chartArea.top);
+    }
+    ctx.restore();
+  }
+};
+Chart.register(windowShade);
+
+const eventMarkers = {
+  id:'eventMarkers',
+  afterDraw(c, args, opts){
+    const {ctx, chartArea, scales:{x}} = c;
+    if(!opts.events || !opts.events.length) return;
+    ctx.save();
+    for(const ev of opts.events){
+      const px = x.getPixelForValue(new Date(ev.date));
+      if(px < chartArea.left || px > chartArea.right) continue;
+      ctx.strokeStyle = ev.color;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(px, chartArea.top);
+      ctx.lineTo(px, chartArea.bottom);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = ev.color;
+      ctx.font = '600 11px Inter, sans-serif';
+      ctx.textAlign = px > chartArea.right - 60 ? 'right' : 'left';
+      // Etykieta rozwiązywana przy KAŻDYM rysowaniu z klucza tłumaczenia —
+      // napisy na canvasie nie są elementami DOM, więc pętla [data-leg]
+      // w applyLang() ich nie dosięgnie; zamiast tego applyLang() woła
+      // chart.update(), a my bierzemy wtedy aktualny język.
+      const text = ev.labelKey ? t(ev.labelKey) : (ev.label || '');
+      // Rozsuwamy etykiety w pionie, gdy kilka zdarzeń wypada blisko siebie,
+      // żeby napisy się nie nakładały (np. deklarowana likwidacja + wykryta).
+      const yOff = chartArea.top + 12 + (ev.row || 0) * 13;
+      ctx.fillText(text, px + (ctx.textAlign === 'right' ? -4 : 4), yOff);
+    }
+    ctx.restore();
+  }
+};
+Chart.register(eventMarkers);
+
+/* Zdarzenia zadeklarowane (siew / likwidacja podana przez rolnika) —
+   przechowywane między drawChart() a updateChartWithMultiData(), która
+   dokłada do nich zdarzenia wykryte z satelity. */
+let _declaredEvents = [];
+
+/* Najdłuższa przerwa w danych, przez którą wolno poprowadzić linię [ms].
+
+   Zimą Sentinel-2 potrafi nie dostarczyć ani jednej użytecznej sceny przez
+   wiele tygodni (chmury i śnieg — maska SCL odrzuca klasy 8/9/10 = chmury
+   i 11 = śnieg, więc scena zaśnieżona jest w całości maskowana i w ogóle nie
+   trafia do serii). Przy spanGaps:true Chart.js łączył wtedy grudzień z
+   wiosną jedną prostą linią — wykres sugerował płynny przebieg NDVI w
+   okresie, w którym NIE BYŁO ŻADNEGO POMIARU. Dla narzędzia kontrolnego to
+   nieakceptowalne: brak danych musi wyglądać jak brak danych, a nie jak
+   pomiar. Krótkie dziury (pojedyncza pochmurna scena, rewizyta S2 co ~5 dni)
+   nadal są łączone. */
+const MAX_GAP_MS = 21 * 24 * 60 * 60 * 1000;
+
+/* Mediana ruchoma — wygładza szum radaru na wykresie.
+
+   Świadomie MEDIANA, nie średnia: filtr medianowy zachowuje ostre progi
+   (nagły skok VV/RVI przy orce to dokładnie ten sygnał, którego szukamy),
+   a jednocześnie usuwa pojedyncze odstrzały typowe dla speckle'u radarowego.
+   Średnia rozmyłaby realne zdarzenie agrotechniczne razem z szumem.
+
+   Wygładzamy WYŁĄCZNIE prezentację. Detekcja zdarzeń (sentinel1.detect_tillage,
+   analytics.detect_agro_events_fused) pracuje po stronie serwera na surowych
+   wartościach i ta funkcja jej nie dotyka. */
+function _rollingMedian(points, window = 3){
+  const half = Math.floor(window / 2);
+  return points.map((p, i) => {
+    const from = Math.max(0, i - half);
+    const to   = Math.min(points.length, i + half + 1);
+    const vals = points.slice(from, to)
+      .map(q => q.y).filter(v => v != null).sort((a, b) => a - b);
+    const med = vals.length ? vals[Math.floor(vals.length / 2)] : p.y;
+    // rawVal (nie "raw") — Chart.js udostępnia oryginalny obiekt punktu jako
+    // ctx.raw, więc nazwanie pola "raw" dałoby mylące ctx.raw.raw
+    return {x: p.x, y: med, rawVal: p.y};
+  });
+}
+
+/* Zawija tekst wyjaśnienia na krótkie linie — Chart.js renderuje każdy
+   element zwróconej tablicy jako osobną linię dymka i nie łamie długich
+   napisów sam z siebie (bez tego dymek rozjechałby się na całą szerokość). */
+function _wrapTip(text, maxLen = 44){
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  if(!words.length) return '';
+  const lines = [];
+  let line = '';
+  for(const w of words){
+    if(line && (line + ' ' + w).length > maxLen){ lines.push(line); line = w; }
+    else line = line ? line + ' ' + w : w;
+  }
+  if(line) lines.push(line);
+  return lines;
+}
+
+function drawChart(res){
+  const minVF = res.thresholds.min_valid_frac;
+  const ok   = res.series.filter(r => r.valid_frac >= minVF);
+  const weak = res.series.filter(r => r.valid_frac <  minVF);
+  const pt = r => ({x:r.date, y:r.ndvi_mean, vf:r.valid_frac});
+  const v = res.verdict || {};
+  const events = [];
+  if(v.sowing_date) events.push({date: v.sowing_date, labelKey: 'ev_sowing', color: '#5C6B60'});
+  if(v.termination) events.push({date: v.termination.date, labelKey: 'ev_termination', color: '#B23B2A'});
+  // Zdarzenia ZADEKLAROWANE przez rolnika. Zdarzenia WYKRYTE z satelity
+  // (agro_events) dochodzą później w updateChartWithMultiData() i są z tymi
+  // scalane — trzymamy je osobno, żeby ponowne wczytanie danych
+  // wielowskaźnikowych nie zdublowało ani nie skasowało tych deklarowanych.
+  _declaredEvents = events.slice();
+  if(chart) chart.destroy();
+  // Wykres startuje z samym NDVI — EVI/SAVI/NDRE/NDWI/RVI dochodzą później
+  // przez updateChartWithMultiData(), która też uzupełnia legendę dynamiczną
+  // (#chartLegendMulti). Czyścimy ją tutaj, żeby nie zostały wpisy z
+  // poprzednio oglądanej działki.
+  const legendMulti = document.getElementById('chartLegendMulti');
+  if(legendMulti) legendMulti.innerHTML = '';
+  chart = new Chart(document.getElementById('chart'), {
+    type:'line',
+    data:{datasets:[
+      {label:'NDVI (wiarygodne)', data:ok.map(pt), borderColor:'#2F7A46',
+       backgroundColor:'#2F7A46', pointRadius:4, tension:.25, spanGaps:MAX_GAP_MS,
+       tipKey:'tip_ndvi'},
+      {label:'zachmurzone', data:weak.map(pt), showLine:false,
+       pointStyle:'crossRot', pointRadius:5, borderColor:'#9AA598',
+       backgroundColor:'#9AA598', tipKey:'tip_cloudy'},
+      {label:'próg poplonu', data:[
+        {x:res.range[0], y:res.thresholds.cover_high},
+        {x:res.range[1], y:res.thresholds.cover_high}],
+       borderColor:'#2F7A46', borderDash:[6,5], borderWidth:1.2,
+       pointRadius:0},
+      {label:'goła gleba', data:[
+        {x:res.range[0], y:res.thresholds.bare_max},
+        {x:res.range[1], y:res.thresholds.bare_max}],
+       borderColor:'#8A6544', borderDash:[6,5], borderWidth:1.2,
+       pointRadius:0},
+    ]},
+    options:{
+      responsive:true, maintainAspectRatio:false, animation:false,
+      scales:{
+        x:{type:'time', min:res.range[0], max:res.range[1],
+           time:{unit:'month', tooltipFormat:'yyyy-MM-dd'},
+           grid:{display:false}},
+        y:{min:-0.1, max:1, title:{display:true, text:'Wskaźniki optyczne [0–1] (NDVI/EVI/SAVI/NDRE/NDWI)'}},
+        // RVI (Sentinel-1) ma inną skalę fizyczną niż wskaźniki optyczne —
+        // formuła 4*VH/(VV+VH) potrafi wychodzić poza [0,1] przy gęstej
+        // biomasie. Naprawa: wcześniej sztywne max:0.6 na tej osi obcinało
+        // wyższe odczyty do góry wykresu (dokładnie efekt "RVI wygląda na
+        // przesunięte do góry", który zgłosił użytkownik) — teraz oś sama
+        // dobiera zakres do realnych danych (beginAtZero, bez sztywnego max).
+        y2:{position:'right', beginAtZero:true, grid:{display:false},
+            title:{display:true, text:'RVI (S1)'}}
+      },
+      plugins:{
+        windowShade:{windows:res.windows},
+        eventMarkers:{events:events},
+        legend:{display:false},
+        tooltip:{callbacks:{
+          label:c => {
+            const label = c.dataset.label || '?';
+            const vf = c.raw && c.raw.vf != null ? c.raw.vf : null;
+            const suffix = vf != null ? ` · ważne piksele ${(vf*100|0)}%` : '';
+            // Dla serii wygładzonych (RVI) pokazujemy obok surowy pomiar —
+            // linia to trend, ale operator musi móc zobaczyć realną wartość.
+            const rawVal = c.raw ? c.raw.rawVal : null;
+            const rawTxt = (rawVal != null && Math.abs(rawVal - c.parsed.y) > 0.0005)
+              ? ` (${t('tip_measured')} ${rawVal.toFixed(3)})` : '';
+            return `${label} ${c.parsed.y.toFixed(3)}${rawTxt}${suffix}`;
+          },
+          // Krótkie wyjaśnienie, co dany wskaźnik właściwie mierzy — inaczej
+          // dymek pokazuje samą liczbę, która bez kontekstu niewiele mówi.
+          // Chart.js nie zawija tekstu sam, więc dzielimy go na linie.
+          afterLabel:c => c.dataset.tipKey ? _wrapTip(t(c.dataset.tipKey)) : ''
+        }}
+      }
+    }
+  });
+}
+
+function updateChartWithMultiData(multiData){
+  if(!chart || !multiData || !Array.isArray(multiData.multi_records)) return;
+  const records = multiData.multi_records || [];
+
+  chart.data.datasets = chart.data.datasets.filter(ds => !ds.isMulti);
+  if(!records.length){ chart.update('none'); return; }
+
+  const toPts = key => records.map(r => ({x:r.date, y:r[key] ?? null, vf:r.valid_frac ?? null}));
+
+  // RVI budujemy z WŁASNYCH dat Sentinel-1, nie z dat scen optycznych.
+  // Naprawa realnego błędu: dawniej seria powstawała przez iterację po
+  // rekordach S2 i dokładne dopasowanie daty (s1ByDate[r.date]) — a S1 i S2
+  // to inne satelity o innych cyklach przelotu, więc trafiały w ten sam
+  // dzień kalendarzowy tylko przypadkiem. Skutek: RVI pojawiał się w
+  // pojedynczych punktach i całkiem znikał zimą, kiedy scen optycznych
+  // (chmury, niskie słońce) prawie nie ma — mimo że radar zbiera dane przez
+  // całą zimę bez przeszkód, bo chmury mu nie przeszkadzają. Oś czasu
+  // Chart.js pozwala każdej serii mieć własne punkty x, więc nie ma powodu
+  // wiązać RVI z kalendarzem S2.
+  // Surowy sygnał radaru mocno szumi (speckle, wilgotność gleby po deszczu,
+  // kąt padania) — na wykresie dawało to nieczytelną "piłę". Wygładzamy
+  // medianą ruchomą; surowy pomiar zostaje w punkcie i pokazujemy go w dymku.
+  const rviPts = _rollingMedian(
+    (multiData.s1_records || [])
+      .filter(r => r && r.date && r.rvi != null)
+      .map(r => ({x:r.date, y:r.rvi}))
+      .sort((a, b) => a.x < b.x ? -1 : a.x > b.x ? 1 : 0)
+  );
+  const multiSets = [
+    {label:'EVI',  key:'evi',  color:'#5B9E3B', hidden:false, legKey:'leg_evi_desc',  tipKey:'tip_evi'},
+    {label:'SAVI', key:'savi', color:'#9FCB52', hidden:false, legKey:'leg_savi_desc', tipKey:'tip_savi'},
+    {label:'NDRE', key:'ndre', color:'#C47A2E', hidden:true,  legKey:'leg_ndre_desc', tipKey:'tip_ndre'},
+    {label:'NDWI', key:'ndwi', color:'#1E88E5', hidden:true,  legKey:'leg_ndwi_desc', tipKey:'tip_ndwi'},
+  ].map(s => ({
+    label: s.label,
+    isMulti: true,
+    legKey: s.legKey,
+    tipKey: s.tipKey,
+    data: toPts(s.key),
+    borderColor: s.color,
+    backgroundColor: s.color,
+    pointRadius: 2,
+    borderWidth: 1.3,
+    tension: .25,
+    spanGaps: MAX_GAP_MS,
+    hidden: s.hidden,
+  }));
+
+  multiSets.push({
+    label:'RVI (S1)',
+    isMulti:true,
+    legKey:'leg_rvi_desc',
+    tipKey:'tip_rvi',
+    data:rviPts,
+    borderColor:'#FF9800',
+    backgroundColor:'#FF9800',
+    // Punkty ukryte w spoczynku (pojawiają się pod kursorem) i cieńsza,
+    // mocniej wygładzona linia — RVI jest sygnałem pomocniczym i nie powinien
+    // wizualnie konkurować z krzywymi optycznymi, na których opiera się ocena.
+    pointRadius:0,
+    pointHoverRadius:4,
+    borderWidth:1.2,
+    tension:.4,
+    spanGaps:MAX_GAP_MS,
+    hidden:false,
+    yAxisID:'y2',
+  });
+
+  chart.data.datasets.push(...multiSets);
+
+  // Zaznacz na wykresie zdarzenia agrotechniczne WYKRYTE z satelity (orka /
+  // likwidacja). Dotąd trafiały wyłącznie na listę tekstową pod wykresem —
+  // na osi czasu nie było po nich śladu, więc nie dało się zobaczyć, w
+  // którym momencie przebiegu NDVI coś się wydarzyło.
+  //
+  // Pomijamy zdarzenia zgodne z deklaracją (within_declared) — ta data jest
+  // już zaznaczona jako "likwidacja" z formularza, nie chcemy dwóch linii w
+  // tym samym miejscu. Filtr pewności/typów jest celowo taki sam jak w
+  // app.py (sekcja 4c), żeby wykres pokazywał dokładnie te zdarzenia, które
+  // realnie wpływają na werdykt fuzji.
+  const EV_LABEL_KEYS = {
+    confirmed_tillage: 'ev_confirmed_tillage',
+    possible_tillage:  'ev_possible_tillage',
+    radar_only_event:  'ev_radar_only',
+  };
+  const detected = (multiData.agro_events || [])
+    .filter(e => e && !e.within_declared
+                 && (e.confidence === 'high' || e.confidence === 'medium')
+                 && EV_LABEL_KEYS[e.type])
+    .map(e => ({
+      date: e.date,
+      labelKey: EV_LABEL_KEYS[e.type],
+      color: e.confidence === 'high' ? '#8E24AA' : '#B07AC4',
+      row: 1,   // druga linijka etykiet, pod "siew"/"likwidacja"
+    }));
+
+  if(chart.options.plugins.eventMarkers){
+    chart.options.plugins.eventMarkers.events = _declaredEvents.concat(detected);
+  }
+  chart.update('none');
+
+  // Legenda widoczna z domyślnie pokazanymi seriami (EVI/SAVI/RVI) — bez
+  // tego użytkownik nie miał żadnej wskazówki, że na wykresie NDVI doszły
+  // kolejne krzywe (dawniej wszystkie podpisane w tooltipie jako "NDVI").
+  // NDRE/NDWI startują ukryte (hidden:true powyżej), więc nie dodajemy ich
+  // tutaj do legendy — dostępne w panelu eksperckim.
+  //
+  // Każdy wpis dostaje krótki opis, co dany wskaźnik właściwie mierzy, w
+  // <span data-leg="..."> — dzięki temu przełączenie języka odświeży go
+  // automatycznie przez istniejącą pętlę [data-leg] w applyLang() (bez tego
+  // opisy zostałyby po polsku po zmianie języka).
+  const legendMulti = document.getElementById('chartLegendMulti');
+  if(legendMulti){
+    legendMulti.innerHTML = multiSets
+      .filter(ds => !ds.hidden)
+      .map(ds => `<span><i class="sw" style="background:${ds.borderColor}"></i>`
+                + `<span><b>${ds.label}</b> <span data-leg="${ds.legKey}">${t(ds.legKey)}</span></span></span>`)
+      .join('');
+  }
+}
+
+function showParcel(res){
+  document.getElementById('map-ph')?.remove();
+  if(!map) initMap();
+  if(parcelLayer) map.removeLayer(parcelLayer);
+  parcelLayer = L.geoJSON(res.parcel.geojson,
+    {style:{color:'#FFD400', weight:3, fillOpacity:.06}}).addTo(map);
+  map.fitBounds(parcelLayer.getBounds(), {padding:[24,24]});
+}
+
+/* Tłumaczenia kodów szczegółów werdyktu (generowanych przez core.py) */
+const DETAIL_CODES = {
+  cover_clear: {
+    pl: p => `Wyraźna okrywa roślinna w oknie oceny (NDVI ${p.ndvi}) — przebieg NDVI typowy dla wysianego poplonu.`,
+    en: p => `Clear vegetation cover in assessment window (NDVI ${p.ndvi}) — NDVI profile typical of a sown cover crop.`,
+    it: p => `Copertura vegetale evidente nella finestra di valutazione (NDVI ${p.ndvi}) — profilo NDVI tipico di una coltura di copertura seminata.`,
+  },
+  cover_mid: {
+    pl: p => `Wegetacja obecna, ale NDVI (${p.ndvi}) w strefie pośredniej — możliwe słabe wschody, samosiewy lub zachwaszczenie.`,
+    en: p => `Vegetation present but NDVI (${p.ndvi}) in intermediate zone — possible weak germination, volunteers or weeds.`,
+    it: p => `Vegetazione presente ma NDVI (${p.ndvi}) in zona intermedia — possibile germinazione debole, spontanee o infestanti.`,
+  },
+  bare_soil: {
+    pl: p => `NDVI (${p.ndvi}) na poziomie gołej gleby / ścierniska przez całe okno oceny.`,
+    en: p => `NDVI (${p.ndvi}) at bare soil / stubble level throughout the assessment window.`,
+    it: p => `NDVI (${p.ndvi}) al livello di suolo nudo / stoppie durante l'intera finestra di valutazione.`,
+  },
+  sparse_veg: {
+    pl: p => `Wegetacja szczątkowa (NDVI ${p.ndvi}), poniżej progu rozwiniętego poplonu.`,
+    en: p => `Sparse vegetation (NDVI ${p.ndvi}), below the threshold for developed cover crop.`,
+    it: p => `Vegetazione rada (NDVI ${p.ndvi}), al di sotto della soglia per una coltura di copertura sviluppata.`,
+  },
+  too_few_scenes: {
+    pl: p => `Za mało bezchmurnych scen w oknie oceny (${p.n}, wymagane ${p.required}).`,
+    en: p => `Too few cloud-free scenes in assessment window (${p.n}, required ${p.required}).`,
+    it: p => `Troppe poche scene senza nuvole nella finestra di valutazione (${p.n}, richieste ${p.required}).`,
+  },
+  cloud_obstruction: {
+    pl: () => `Zachmurzenie uniemożliwia wiarygodną ocenę z Sentinel-2 w tym okresie.`,
+    en: () => `Cloud cover prevents reliable Sentinel-2 assessment in this period.`,
+    it: () => `La copertura nuvolosa impedisce una valutazione affidabile di Sentinel-2 in questo periodo.`,
+  },
+  no_winter_scenes: {
+    pl: () => `Brak użytecznych scen w oknie zimowym (chmury/śnieg) — utrzymanie okrywy do połowy lutego niepotwierdzone.`,
+    en: () => `No usable scenes in winter window (clouds/snow) — cover maintenance until mid-February unconfirmed.`,
+    it: () => `Nessuna scena utilizzabile nella finestra invernale (nuvole/neve) — mantenimento della copertura fino a metà febbraio non confermato.`,
+  },
+  winter_ok: {
+    pl: p => `Okrywa zimowa potwierdzona (NDVI ${p.ndvi}).`,
+    en: p => `Winter cover confirmed (NDVI ${p.ndvi}).`,
+    it: p => `Copertura invernale confermata (NDVI ${p.ndvi}).`,
+  },
+  winter_drop: {
+    pl: p => `Jesienią wegetacja była obecna, ale zimą NDVI (${p.ndvi}) spadł do poziomu gleby — możliwa przedwczesna likwidacja poplonu.`,
+    en: p => `Vegetation was present in autumn, but winter NDVI (${p.ndvi}) dropped to soil level — possible premature termination.`,
+    it: p => `La vegetazione era presente in autunno, ma l'NDVI invernale (${p.ndvi}) è sceso al livello del suolo — possibile terminazione prematura.`,
+  },
+  winter_ambiguous: {
+    pl: p => `Okrywa zimowa niejednoznaczna (NDVI ${p.ndvi}) — przymrozki i śnieg mogą zaniżać NDVI.`,
+    en: p => `Winter cover ambiguous (NDVI ${p.ndvi}) — frost and snow may underestimate NDVI.`,
+    it: p => `Copertura invernale ambigua (NDVI ${p.ndvi}) — gelo e neve possono sottostimare l'NDVI.`,
+  },
+  low_quality_data: {
+    pl: p => `⚠ Dane częściowe: ${p.n_low}/${p.n_all} scen obniżonej jakości (valid_frac 0.35–0.50). ${p.ambiguous ? 'Wynik niejednoznaczny — ' : ''}Werdykt wymaga zatwierdzenia operatora.`,
+    en: p => `⚠ Partial data: ${p.n_low}/${p.n_all} scenes of reduced quality (valid_frac 0.35–0.50). ${p.ambiguous ? 'Ambiguous result — ' : ''}Verdict requires operator approval.`,
+    it: p => `⚠ Dati parziali: ${p.n_low}/${p.n_all} scene di qualità ridotta (valid_frac 0.35–0.50). ${p.ambiguous ? 'Risultato ambiguo — ' : ''}Il verdetto richiede l'approvazione dell'operatore.`,
+  },
+  low_quality_minor: {
+    pl: p => `ℹ ${p.n_low}/${p.n_all} scen obniżonej jakości, ale dominują sceny wiarygodne — bez konieczności zatwierdzenia.`,
+    en: p => `ℹ ${p.n_low}/${p.n_all} scenes of reduced quality, but reliable scenes dominate — no approval required.`,
+    it: p => `ℹ ${p.n_low}/${p.n_all} scene di qualità ridotta, ma le scene affidabili dominano — nessuna approvazione richiesta.`,
+  },
+  no_data_all_low_quality: {
+    pl: p => `Wszystkie ${p.n} sceny w oknie oceny mają zbyt duże zachmurzenie (valid_frac poniżej ${p.auto_vf}). Brak wiarygodnych danych satelitarnych — ocena niemożliwa. Sprawdź ponownie po poprawie warunków.`,
+    en: p => `All ${p.n} scenes in the assessment window have excessive cloud cover (valid_frac below ${p.auto_vf}). No reliable satellite data — assessment impossible. Check again after conditions improve.`,
+    it: p => `Tutte le ${p.n} scene nella finestra di valutazione hanno eccessiva copertura nuvolosa (valid_frac sotto ${p.auto_vf}). Nessun dato satellitare affidabile — valutazione impossibile. Verificare nuovamente dopo il miglioramento delle condizioni.`,
+  },
+  sar_tillage_alarm: {
+    pl: p => `⚠ Radar Sentinel-1 wykrył ${p.events} zdarzenie/a agrotechniczne (skok VV +${p.vv_jump} dB, pewność: ${p.confidence}) w okolicach ${p.last_date}. Możliwa orka lub likwidacja poplonu — wynik NDVI wymaga weryfikacji.`,
+    en: p => `⚠ Sentinel-1 radar detected ${p.events} agro-technical event(s) (VV jump +${p.vv_jump} dB, confidence: ${p.confidence}) around ${p.last_date}. Possible tillage or cover crop termination — NDVI result requires verification.`,
+    it: p => `⚠ Il radar Sentinel-1 ha rilevato ${p.events} evento/i agrotecnico (salto VV +${p.vv_jump} dB, confidenza: ${p.confidence}) intorno al ${p.last_date}. Possibile aratura o terminazione della coltura — il risultato NDVI richiede verifica.`,
+  },
+  sar_backup_vegetation: {
+    pl: p => `🛰️ Dane NDVI niewystarczające (chmury), ale Sentinel-1 SAR potwierdza wegetację (RVI=${p.rvi} ≥ ${p.threshold}). Poplon prawdopodobnie obecny.`,
+    en: p => `🛰️ NDVI data insufficient (clouds), but Sentinel-1 SAR confirms vegetation (RVI=${p.rvi} ≥ ${p.threshold}). Cover crop probably present.`,
+    it: p => `🛰️ Dati NDVI insufficienti (nuvole), ma il SAR Sentinel-1 conferma la vegetazione (RVI=${p.rvi} ≥ ${p.threshold}). Coltura di copertura probabilmente presente.`,
+  },
+  sar_backup_bare: {
+    pl: p => `🛰️ Dane NDVI niewystarczające (chmury). Sentinel-1 SAR wskazuje gołą glebę (RVI=${p.rvi} ≤ ${p.threshold}). Brak poplonu.`,
+    en: p => `🛰️ NDVI data insufficient (clouds). Sentinel-1 SAR indicates bare soil (RVI=${p.rvi} ≤ ${p.threshold}). No cover crop.`,
+    it: p => `🛰️ Dati NDVI insufficienti (nuvole). Il SAR Sentinel-1 indica suolo nudo (RVI=${p.rvi} ≤ ${p.threshold}). Nessuna coltura di copertura.`,
+  },
+  sar_inconclusive: {
+    pl: p => `🛰️ Dane SAR Sentinel-1 dostępne (RVI=${p.rvi}), ale niejednoznaczne — brak pewności bez danych optycznych.`,
+    en: p => `🛰️ Sentinel-1 SAR data available (RVI=${p.rvi}), but inconclusive — no certainty without optical data.`,
+    it: p => `🛰️ Dati SAR Sentinel-1 disponibili (RVI=${p.rvi}), ma inconcludenti — nessuna certezza senza dati ottici.`,
+  },
+  sar_confirms_vegetation: {
+    pl: p => `✓ Sentinel-1 SAR potwierdza wegetację (RVI=${p.rvi}). Obydwa sygnały (optyczny S2 + radarowy S1) zgodne — wyższa pewność oceny.`,
+    en: p => `✓ Sentinel-1 SAR confirms vegetation (RVI=${p.rvi}). Both signals (optical S2 + radar S1) agree — higher assessment confidence.`,
+    it: p => `✓ Il SAR Sentinel-1 conferma la vegetazione (RVI=${p.rvi}). Entrambi i segnali (ottico S2 + radar S1) concordano — maggiore affidabilità.`,
+  },
+  compliance_note: {
+    en: p => p.text,  // compliance notes pozostają po polsku (zawierają daty, numery przepisów)
+    it: p => p.text,
+  },
+};
+
+function _renderDetails(v){
+  // esc() na obu ścieżkach — details/fused_details wstawiają teraz m.in.
+  // treść zdarzeń agrotechnicznych (sentinel1/analytics), więc defensywnie
+  // escapujemy tak samo jak w renderMonitorCard/notifier, nawet jeśli dziś
+  // żadne pole nie niesie danych bezpośrednio wpisanych przez użytkownika.
+  const codes = v.detail_codes;
+  if(codes && codes.length > 0){
+    return codes.map(([code, params]) => {
+      const def = DETAIL_CODES[code];
+      const fn = def && def[currentLang] ? def[currentLang] : (def && def.pl ? def.pl : null);
+      const text = fn ? fn(params) : (params.text || code);
+      return `<p>${esc(text)}</p>`;
+    }).join('');
+  }
+  // fallback: stare details po polsku (dla starszych odpowiedzi)
+  return (v.details || []).map(d => `<p>${esc(d)}</p>`).join('');
+}
+
+function showVerdict(res){
+  const v = res.verdict, s = STATUS(v.status);
+  const el = document.getElementById('verdict');
+  el.style.setProperty('--v-edge', s.edge);
+  document.getElementById('v-status').textContent = s.label;
+  document.getElementById('v-status').className = 'v-status ' + s.cls;
+  let confText = v.confidence ? `${t('conf_prefix')}${v.confidence}` : '';
+  if(v.compliance_issue){
+    confText += ` <span style="color:var(--amber);font-weight:600">${t('compliance_badge')}</span>`;
+  }
+  if(v.requires_operator_approval){
+    confText += ` <span style="color:var(--amber);font-weight:600">${t('low_quality_badge')}</span>`;
+  }
+  document.getElementById('v-conf').innerHTML = confText;
+  // baner niskiej jakości danych
+  const lowQualEl = document.getElementById('v-low-quality');
+  if(v.requires_operator_approval && v.low_quality_scenes > 0){
+    lowQualEl.style.display = 'block';
+    lowQualEl.innerHTML = `🌥 <b>${v.low_quality_scenes}</b> ${t('low_quality_banner')}`;
+  } else {
+    lowQualEl.style.display = 'none';
+  }
+  // detale werdyktu — tłumaczone przez detail_codes gdy dostępne, fallback na details (PL)
+  const detailHtml = _renderDetails(v);
+  document.getElementById('v-details').innerHTML = detailHtml;
+  const M = v.metrics || {}, chips = [];
+  if(M.ndvi_baza != null) chips.push(`<b>${t('chip_baza')}</b> ${M.ndvi_baza.toFixed(2)}`);
+  if(M.ndvi_szczyt != null) chips.push(`<b>${t('chip_szczyt')}</b> ${M.ndvi_szczyt.toFixed(2)}`);
+  if(M.przyrost != null) chips.push(`<b>${t('chip_przyrost')}</b> ${M.przyrost>=0?'+':''}${M.przyrost.toFixed(2)}`);
+  if(M.ndvi_zima != null) chips.push(`<b>${t('chip_zima')}</b> ${M.ndvi_zima.toFixed(2)}`);
+  if(M.sceny_w_oknie != null) chips.push(`<b>${t('chip_sceny')}</b> ${M.sceny_w_oknie}`);
+  if(M.dni_od_siewu_do_szczytu != null) chips.push(`<b>${t('chip_dni_siewu')}</b> ${M.dni_od_siewu_do_szczytu}`);
+  document.getElementById('v-chips').innerHTML =
+    chips.map(c => `<span class="chip">${c}</span>`).join('');
+  document.getElementById('v-warn').innerHTML =
+    (res.warnings||[]).map(w => `⚠ ${w}`).join('<br>');
+  const p = res.parcel;
+  document.getElementById('v-meta').textContent =
+    [p.wojewodztwo && `woj. ${p.wojewodztwo}`, p.powiat && `pow. ${p.powiat}`,
+     p.gmina && `gm. ${p.gmina}`, `${p.area_ha} ha`]
+    .filter(Boolean).join(' · ');
+  el.style.display = 'block';
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+}
+
+function showPendingVerdict(){
+  const el = document.getElementById('verdict');
+  el.style.setProperty('--v-edge', '#8B948C');
+  document.getElementById('v-status').textContent = t('analysis_pending_status');
+  document.getElementById('v-status').className = 'v-status unk';
+  document.getElementById('v-conf').textContent = t('analysis_pending_conf');
+  document.getElementById('v-details').innerHTML = `<p>${t('analysis_pending_details')}</p>`;
+  document.getElementById('v-chips').innerHTML = '';
+  document.getElementById('v-warn').innerHTML = '';
+  document.getElementById('v-low-quality').style.display = 'none';
+  el.style.display = 'block';
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+}
+
+/* ============================== FORMULARZ POJEDYNCZY ==================== */
+/* ── stan globalny analityki ── */
+let _lastMultiData   = null;  // wynik /api/check_multi
+let _lastCheckParams = null;  // {parcel_id,typ,rok,sowing_date,termination_date}
+                               // użyte do ostatniego check_multi — do eksportu PDF
+let _expertChartInst = null;  // instancja Chart.js panelu eksperta
+let _activeLayerKeys = new Set(['ndvi','evi','savi']);
+let _lastNdviResult  = null;  // wynik /api/check (bazowy)
+let _multiLoadSeq    = 0;     // licznik żądań _startMultiLoad — chroni przed
+                               // tym, żeby starsza (wolniejsza) odpowiedź
+                               // nadpisała stan nowszego żądania (np. szybkie
+                               // przełączenie między działkami w batchu)
+
+document.getElementById('form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const btn = document.getElementById('go'), err = document.getElementById('err');
+  err.style.display = 'none';
+  _hideBatchNav();
+  _cameFromBatch = false;
+  _currentBatchIdx = -1;
+  _lastMultiData = null;
+  btn.disabled = true; btn.textContent = t('btn_checking');
+
+  // ukryj stare dane analityczne
+  document.getElementById('csWrap').style.display = 'none';
+  document.getElementById('expertToggle').style.display = 'none';
+  document.getElementById('expertPanel').classList.remove('open');
+  const csErrReset = document.getElementById('csErrNote');
+  if(csErrReset) csErrReset.style.display = 'none';
+
+  const body = {
+    parcel_id: document.getElementById('pid').value.trim(),
+    typ: document.querySelector('input[name=typ]:checked').value,
+    rok: parseInt(document.getElementById('rok').value, 10),
+  };
+  const sowVal = document.getElementById('sowDateSingle').value;
+  if(sowVal) body.sowing_date = sowVal;
+  if(document.getElementById('hasTermination').checked){
+    body.termination_date = document.getElementById('termDate').value || null;
+    body.termination_method = document.getElementById('termMethod').value;
+  }
+
+  try{
+    // Odpalamy NDVI i pełną analizę wielowskaźnikową RÓWNOLEGLE (dwa niezależne
+    // requesty — serwer i tak przetwarza je w osobnych wątkach, patrz ta sama
+    // zasada zastosowana w _process_one dla batcha). Werdykt/kategoria
+    // pokazują się dopiero raz, na podstawie pełnej analizy — nie ma już
+    // migającej, wstępnej kategorii z samego NDVI, która później by się
+    // zmieniała.
+    const multiBody = {...body, include_s1: true};
+    const multiFetchPromise = fetch('/api/check_multi', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(multiBody)});
+
+    const r = await fetch('/api/check', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || `Błąd ${r.status}`);
+    _lastNdviResult = data;
+    showParcel(data); drawChart(data); showPendingVerdict(); showSatelliteImage(data);
+
+    // ── Krok 2 wystartował już równolegle z krokiem 1 — czekamy na dokończenie ──
+    await _startMultiLoad(body, data, multiFetchPromise);
+
+  }catch(ex){
+    err.textContent = ex.message;
+    err.style.display = 'block';
+  }finally{
+    btn.disabled = false; btn.textContent = t('btn_check');
+  }
+});
+
+/* Resetuje widgety analizy wielowskaźnikowej do stanu "ładowanie". */
+function _resetMultiWidgets(){
+  const csWrap = document.getElementById('csWrap');
+  csWrap.style.display = 'block';
+  const csErrPrev = document.getElementById('csErrNote');
+  if(csErrPrev) csErrPrev.style.display = 'none';
+  const csLoading = document.getElementById('csLoading');
+  csLoading.style.display = 'flex';
+  document.getElementById('csLoadingTxt').textContent = t('cs_loading');
+  document.getElementById('csNum').textContent = '…';
+  document.getElementById('csGrade').textContent = '…';
+  document.getElementById('csBarFill').style.width = '0%';
+  document.getElementById('csAltNote').style.display = 'none';
+  document.getElementById('csRangeNote').style.display = 'none';
+  document.getElementById('idxChips').innerHTML = '';
+  document.getElementById('agroEvents').innerHTML = '';
+  document.getElementById('biomassStrip').style.display = 'none';
+  document.getElementById('growingCondStrip').style.display = 'none';
+  document.getElementById('pdfExportWrap').style.display = 'none';
+}
+
+/* Renderuje wszystkie widgety zależne od pełnej odpowiedzi /api/check_multi
+ * (Confidence Score, chipy, biomasa, zdarzenia, werdykt, panel eksperta,
+ * wykres) — używane zarówno po świeżym fetchu, jak i po odtworzeniu z
+ * cache'u policzonego już podczas batcha (patrz multi_full niżej). */
+function _applyMultiData(data, ndviData, targetBatchIdx){
+  _lastMultiData = data;
+  _renderConfidenceScore(data);
+  _renderIdxChips(data);
+  _renderBiomass(data);
+  _renderAgroEvents(data);
+  _renderGrowingConditions(data);
+  document.getElementById('pdfExportWrap').style.display = _lastCheckParams ? 'block' : 'none';
+  _applyFusedVerdict(data, targetBatchIdx);
+  _initExpertPanel(data, ndviData);
+  updateChartWithMultiData(data);
+}
+
+/* Uruchamia pobieranie danych multi-spektralnych (albo dołącza się do już
+ * wystartowanego w tle requestu — presetFetchPromise, patrz submit handler
+ * formularza, gdzie /api/check i /api/check_multi ruszają równolegle). */
+async function _startMultiLoad(body, ndviData, presetFetchPromise){
+  // Zapamiętane, żeby przycisk eksportu PDF mógł odtworzyć dokładnie ten
+  // sam zestaw parametrów (typ/rok/daty), którym policzono aktualnie
+  // wyświetlaną kartę — bez tego trzeba by je wyciągać z samej odpowiedzi,
+  // która ich nie zawiera (parcel_info ma tylko dane z ULDK, nie formularz).
+  _lastCheckParams = {parcel_id: body.parcel_id, typ: body.typ, rok: body.rok,
+                       sowing_date: body.sowing_date || null,
+                       termination_date: body.termination_date || null};
+  const mySeq = ++_multiLoadSeq;
+  // Zamrażamy indeks wiersza batcha "na moment wywołania" — jeśli
+  // użytkownik zdąży przełączyć się na inny wiersz zanim ta odpowiedź
+  // wróci, i tak nie chcemy nadpisywać złego elementu listy.
+  const targetBatchIdx = _currentBatchIdx;
+
+  // Batch (patrz app.py _process_one) już policzył pełną analizę
+  // wielowskaźnikową dla tej pozycji, żeby wyznaczyć finalną kategorię —
+  // wynik jest zapisany w ndviData.multi_full. Użyj go od razu zamiast
+  // przeliczać wszystko ponownie na żywo (te same dane, ten sam Sentinel
+  // Hub) — to właśnie ta kilkusekundowa różnica między "kategoria już
+  // gotowa" a "reszta się dopiero wczytuje" po otwarciu karty działki.
+  if(ndviData && ndviData.multi_full){
+    _resetMultiWidgets();
+    document.getElementById('csLoading').style.display = 'none';
+    _applyMultiData(ndviData.multi_full, ndviData, targetBatchIdx);
+    return;
+  }
+
+  _resetMultiWidgets();
+  const csWrap = document.getElementById('csWrap');
+
+  try{
+    const r = presetFetchPromise ? await presetFetchPromise : await fetch('/api/check_multi', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({...body, include_s1: true})});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail?.slice(0,120) || `Błąd ${r.status}`);
+
+    if(mySeq !== _multiLoadSeq) return; // odpowiedź nieaktualna — porzuć
+
+    _applyMultiData(data, ndviData, targetBatchIdx);
+
+  }catch(ex){
+    if(mySeq !== _multiLoadSeq) return; // odpowiedź nieaktualna — porzuć
+
+    // Błąd modułu fuzji (S1 + multi-indeksy) — to wzbogacenie werdyktu NDVI,
+    // nie jego zależność blokująca. Naprawa: dawniej ten catch nic nie robił
+    // z panelem werdyktu, więc jeśli ndviData był pokazany tylko jako
+    // showPendingVerdict() (jak teraz, gdy oba kroki lecą równolegle), przy
+    // błędzie kroku 2 werdykt zostawał na zawsze zawieszony na "analiza w
+    // toku" — nigdy nie pokazywał się żaden wynik. Teraz spadamy z powrotem
+    // na sam werdykt NDVI z dopiskiem, że pełna analiza była niedostępna.
+    csWrap.style.display = 'none';
+    const csErr = document.getElementById('csErrNote');
+    if(csErr){
+      csErr.textContent = t('cs_unavailable');
+      csErr.style.display = 'block';
+    }
+    if(ndviData && ndviData.verdict){
+      const v = ndviData.verdict;
+      // Dopisujemy zarówno do details (stary format), jak i detail_codes
+      // (nowy, preferowany przez _renderDetails — code spoza DETAIL_CODES
+      // renderuje się z params.text, patrz _renderDetails).
+      const details = [...(v.details || []), t('cs_unavailable')];
+      const detail_codes = [...(v.detail_codes || []), ['multi_analysis_unavailable', {text: t('cs_unavailable')}]];
+      showVerdict({...ndviData, verdict: {...v, details, detail_codes}});
+    }
+    _initExpertPanel(null, ndviData);
+  }finally{
+    if(mySeq === _multiLoadSeq) document.getElementById('csLoading').style.display = 'none';
+  }
+}
+
+function _applyFusedVerdict(multiData, batchIdx){
+  if(!multiData || !multiData.fused_verdict || !_lastNdviResult) return;
+  const baseVerdict = _lastNdviResult.verdict || {};
+  const fused = multiData.fused_verdict || {};
+  _lastNdviResult.verdict = {
+    ...baseVerdict,
+    ...fused,
+    // zachowujemy metryki NDVI z bazowego check dla chipów i kontekstu
+    metrics: baseVerdict.metrics || {},
+    termination: baseVerdict.termination || null,
+  };
+  if(multiData.fused_category){
+    _lastNdviResult.category = multiData.fused_category;
+  }
+
+  // Jeśli jesteśmy w podglądzie rekordu wsadowego, aktualizuj też jego kategorię
+  // po pełnej analizie (NDVI + multi-indeksy), a następnie odśwież listy.
+  // Używamy indeksu "zamrożonego" w momencie startu żądania (batchIdx), nie
+  // aktualnego _currentBatchIdx — inaczej stara odpowiedź mogłaby nadpisać
+  // wynik innego, aktualnie przeglądanego wiersza.
+  if(batchIdx !== undefined && batchIdx >= 0 && lastBatchItems[batchIdx]){
+    const it = lastBatchItems[batchIdx];
+    if(it.result){
+      it.result.verdict = _lastNdviResult.verdict;
+      if(multiData.fused_category) it.result.category = multiData.fused_category;
+      renderBatchResults(lastBatchItems);
+    }
+  }
+  showVerdict(_lastNdviResult);
+}
+
+/* Renderuje kołowy wskaźnik Confidence Score */
+function _renderConfidenceScore(data){
+  const cs = data.confidence;
+  const csLoading = document.getElementById('csLoading');
+  csLoading.style.display = 'none';
+  if(!cs || cs.score === null){
+    document.getElementById('csNum').textContent = '?';
+    document.getElementById('csLabel').textContent = t('cs_no_data');
+    return;
+  }
+
+  const score = cs.score;
+  const CIRCUMFERENCE = 144.5; // 2 * π * 23
+  const offset = CIRCUMFERENCE * (1 - score / 100);
+  const arc = document.getElementById('csArc');
+  arc.style.strokeDashoffset = offset;
+
+  // Kolor zależny od grade
+  const colors = {A:'#2D6B1A', B:'#7FAF40', C:'#C47A2E', D:'#B56A00', F:'#A83020'};
+  arc.style.stroke = colors[cs.grade] || '#2D6B1A';
+
+  document.getElementById('csNum').textContent = Math.round(score);
+  document.getElementById('csGrade').textContent = cs.grade;
+  document.getElementById('csBarFill').style.width = score + '%';
+  document.getElementById('csBarFill').style.background = colors[cs.grade] || '#2D6B1A';
+  document.getElementById('csLabel').textContent = cs.label || t('cs_label');
+
+  // Zakres orientacyjny wokół score — NIE jest to statystyczny przedział
+  // ufności (nie mamy rozkładu błędu), tylko widoczna postać niepewności,
+  // która i tak już wpływa na sam score przez quality_penalty/sparse_penalty
+  // (patrz analytics.compute_confidence_score / SCORE_UNCERTAINTY_BASE_PP).
+  const rangeEl = document.getElementById('csRangeNote');
+  if(cs.score_low != null && cs.score_high != null && (cs.score_low !== score || cs.score_high !== score)){
+    rangeEl.style.display = 'block';
+    rangeEl.textContent = `zakres orientacyjny: ${Math.round(cs.score_low)}–${Math.round(cs.score_high)} (jakość/kompletność danych)`;
+  } else {
+    rangeEl.style.display = 'none';
+    rangeEl.textContent = '';
+  }
+
+  // Przejrzystość wyboru dnia: jeśli wybraliśmy wiarygodną scenę zamiast
+  // słabszej jakościowo, ale o wyższym surowym score, pokazujemy obok w
+  // nawiasie, ile dałaby ta odrzucona scena — żeby nie ukrywać tego wyboru.
+  const altEl = document.getElementById('csAltNote');
+  if(cs.best_unfiltered_score != null){
+    altEl.style.display = 'block';
+    altEl.textContent = t('cs_alt_note')
+      .replace('{score}', Math.round(cs.best_unfiltered_score))
+      .replace('{date}', cs.best_unfiltered_date || '');
+  } else {
+    altEl.style.display = 'none';
+    altEl.textContent = '';
+  }
+}
+
+/* Chipy z wartościami EVI, SAVI, NDRE, NDWI */
+function _renderIdxChips(data){
+  const peak = data.peak_record;
+  const wrap = document.getElementById('idxChips');
+  if(!peak){ wrap.innerHTML = ''; return; }
+
+  const indices = [
+    {key:'ndvi', label:'NDVI', hi:0.42, lo:0.30},
+    {key:'evi',  label:'EVI',  hi:0.50, lo:0.25},
+    {key:'savi', label:'SAVI', hi:0.40, lo:0.20},
+    {key:'ndre', label:'NDRE', hi:0.45, lo:0.20},
+    {key:'ndwi', label:'NDWI', hi:0.40, lo:0.15},
+  ];
+  wrap.innerHTML = indices.map(({key, label, hi, lo}) => {
+    const v = peak[key];
+    if(v == null) return `<span class="idx-chip na">${label} —</span>`;
+    const cls = v >= hi ? 'good' : v >= lo ? 'mid' : 'bad';
+    return `<span class="idx-chip ${cls}" title="${label}">${label} ${v.toFixed(3)}</span>`;
+  }).join('');
+
+  // SAR RVI jeśli dostępne
+  const rawComps = data.confidence?.raw_components || null;
+  const rviRaw = (peak && peak.rvi != null) ? peak.rvi
+    : (rawComps && rawComps.rvi != null ? rawComps.rvi : null);
+  if(rviRaw != null){
+    const cls = rviRaw >= 0.4 ? 'good' : rviRaw >= 0.2 ? 'mid' : 'bad';
+    wrap.innerHTML += `<span class="idx-chip ${cls}" title="Radar Vegetation Index (S1)">RVI ${rviRaw.toFixed(3)}</span>`;
+  }
+
+  // REIP — informacyjny (nm, nie [0,1] jak reszta); scalony z NDRE w
+  // Confidence Score (patrz analytics.compute_confidence_score), więc tu
+  // pokazujemy tylko surową wartość dla przejrzystości, nie osobny wpływ na wynik.
+  const reipRaw = peak.reip;
+  if(reipRaw != null){
+    const cls = reipRaw >= 722 ? 'good' : reipRaw >= 712 ? 'mid' : 'bad';
+    wrap.innerHTML += `<span class="idx-chip ${cls}" title="Red Edge Inflection Point [nm] — scalony z NDRE w ocenie">REIP ${reipRaw.toFixed(1)}nm</span>`;
+  }
+
+  // NDTI — informacyjny; nie wpływa na Confidence Score, tylko na wykrywanie
+  // zdarzeń agrotechnicznych (patrz analytics.detect_agro_events_fused).
+  const ndtiRaw = peak.ndti;
+  if(ndtiRaw != null){
+    const cls = ndtiRaw >= 0.20 ? 'good' : ndtiRaw >= 0.05 ? 'mid' : 'bad';
+    wrap.innerHTML += `<span class="idx-chip ${cls}" title="Normalized Difference Tillage Index — sygnatura gleby/resztek, wspiera wykrywanie orki">NDTI ${ndtiRaw.toFixed(3)}</span>`;
+  }
+}
+
+/* Pasek biomasy */
+function _renderBiomass(data){
+  const bm = data.biomass;
+  const strip = document.getElementById('biomassStrip');
+  if(!bm){ strip.style.display = 'none'; return; }
+  const bioRange = (bm.biomass_low_t_ha != null && bm.biomass_high_t_ha != null)
+    ? `${bm.biomass_low_t_ha.toFixed(1)}–${bm.biomass_high_t_ha.toFixed(1)}`
+    : bm.biomass_t_ha.toFixed(1);
+  const co2Range = (bm.carbon_co2eq_low_t_ha != null && bm.carbon_co2eq_high_t_ha != null)
+    ? `${bm.carbon_co2eq_low_t_ha.toFixed(1)}–${bm.carbon_co2eq_high_t_ha.toFixed(1)}`
+    : bm.carbon_co2eq_t_ha.toFixed(1);
+  document.getElementById('bioVal').textContent = bioRange;
+  document.getElementById('co2Val').textContent = co2Range;
+  document.getElementById('bioLbl').textContent = t('biomass_unit');
+  document.getElementById('co2Lbl').textContent = t('co2_unit');
+  const capNote = bm.at_model_cap ? ' ' + t('biomass_at_cap') : '';
+  document.getElementById('bioCaveat').textContent = t('biomass_caveat') + capNote;
+  strip.style.display = 'flex';
+}
+
+/* Eksport PDF dla aktualnie wyświetlanej działki — GET z parametrami
+ * zapamiętanymi w _lastCheckParams (patrz _startMultiLoad), więc raport
+ * dotyczy dokładnie tego, co widać na ekranie. */
+function _exportParcelPdf(btn){
+  if(!_lastCheckParams || !_lastCheckParams.parcel_id) return;
+  const p = _lastCheckParams;
+  const qs = new URLSearchParams({parcel_id: p.parcel_id, typ: p.typ, rok: p.rok});
+  if(p.sowing_date) qs.set('sowing_date', p.sowing_date);
+  if(p.termination_date) qs.set('termination_date', p.termination_date);
+  window.open(`/api/parcel/${encodeURIComponent(p.parcel_id)}/report_pdf?${qs.toString()}`, '_blank');
+}
+
+/* Warunki wzrostu (pogoda/GDD) + kontekst terenu — CZYSTO INFORMACYJNE.
+ * Te dane NIGDY nie wpływają na Confidence Score ani status (patrz
+ * weather.growing_conditions_summary / analytics.get_season_phase
+ * docstringi) — pokazujemy je operatorowi jako kontekst do własnej oceny,
+ * np. "słaby NDVI, ale i tak było zimno/sucho" albo "wysokie ryzyko erozji
+ * na tym stoku". */
+function _renderGrowingConditions(data){
+  const gc = data.growing_conditions || null;
+  const wc = data.weather_context || null;
+  const tc = data.terrain_context || null;
+  const strip = document.getElementById('growingCondStrip');
+  const kpisEl = document.getElementById('growingCondKpis');
+  const caveatEl = document.getElementById('growingCondCaveat');
+
+  const kpis = [];
+  if(gc && gc.cumulative_gdd != null){
+    kpis.push({val: Math.round(gc.cumulative_gdd), lbl: `GDD (baza ${gc.gdd_base_temp_c}°C)`});
+  }
+  if(gc && gc.total_precip_mm != null){
+    kpis.push({val: Math.round(gc.total_precip_mm), lbl: 'opad [mm]'});
+  }
+  if(gc && gc.total_radiation_mj != null){
+    kpis.push({val: Math.round(gc.total_radiation_mj), lbl: 'naslon. [MJ/m²]'});
+  }
+  if(tc && tc.slope_deg != null){
+    kpis.push({val: tc.slope_deg.toFixed(1) + '°', lbl: `nachylenie (erozja: ${tc.erosion_risk || '—'})`});
+  }
+
+  if(!kpis.length && !wc){ strip.style.display = 'none'; return; }
+
+  kpisEl.innerHTML = kpis.map(k => `
+    <div class="biomass-kpi">
+      <div class="biomass-val">${k.val}</div>
+      <div class="biomass-lbl">${k.lbl}</div>
+    </div>`).join('');
+
+  const notes = [];
+  if(wc && wc.frost_days > 0) notes.push(`przymrozki: ${wc.frost_days} dni (pierwszy: ${wc.first_frost_date || '—'})`);
+  if(wc && wc.dry_spell_days > 0) notes.push(`posucha: ${wc.dry_spell_days} dni`);
+  if(data.weather_error) notes.push(`brak danych pogodowych (${data.weather_error})`);
+  notes.push('Kontekst informacyjny — nie zmienia oceny ani statusu.');
+  caveatEl.textContent = notes.join(' • ');
+
+  strip.style.display = 'flex';
+}
+
+/* Zdarzenia agrotechniczne */
+function _renderAgroEvents(data){
+  const wrap = document.getElementById('agroEvents');
+  const events = (data.agro_events || []).filter(e => !e.within_declared);
+  if(!events.length){ wrap.innerHTML = ''; return; }
+  const parcelId = data.parcel_id || '';
+
+  wrap.innerHTML = events.map((ev, i) => {
+    const cls = ev.confidence === 'high' ? 'high' : 'medium';
+    const icon = ev.sar_confirmed ? '🛰️' : '⚠';
+    // Dodatkowa, RĘCZNA analiza InSAR ma sens tylko tam, gdzie nie mamy
+    // już niezależnego, fizycznego potwierdzenia (SAR-amplituda albo
+    // NDTI) — dla confirmed_tillage/sar_confirmed nie wnosi nic nowego.
+    const insarBtn = (!ev.sar_confirmed && !ev.ndti_confirmed)
+      ? `<button class="btn-insar" data-parcel="${parcelId}" data-date="${ev.date}"
+           onclick="_requestInsarCoherence(this)">🛰️ Sprawdź koherencję InSAR</button>
+         <div class="insar-result" id="insarResult-${i}"></div>`
+      : '';
+    return `<div class="agro-event ${cls}">
+      <span class="agro-event-icon">${icon}</span>
+      <div class="agro-event-body">
+        <div class="agro-event-date">${ev.date}</div>
+        <div>${ev.message}</div>
+        ${insarBtn}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+/* Koherencja InSAR — dodatkowa analiza na życzenie operatora (patrz
+   insar.py: asynchroniczne zlecenie w CDSE On-Demand Production API, bez
+   gwarantowanego czasu ukończenia — dlatego odpytujemy status co kilkanaście
+   sekund zamiast czekać w jednym żądaniu). Czysto informacyjne — wynik NIE
+   zmienia automatycznie werdyktu, operator sam ocenia dodatkowy dowód. */
+async function _requestInsarCoherence(btn){
+  const parcelId = btn.dataset.parcel;
+  const eventDate = btn.dataset.date;
+  const resultEl = btn.nextElementSibling;
+  btn.disabled = true;
+  resultEl.textContent = '⏳ Wyszukiwanie sceny SLC i zlecanie analizy…';
+  resultEl.style.display = 'block';
+
+  try{
+    const r = await fetch(`/api/parcel/${encodeURIComponent(parcelId)}/insar_coherence`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({event_date: eventDate}),
+    });
+    const d = await r.json();
+    if(!r.ok){
+      resultEl.textContent = `✗ ${d.detail || 'Błąd zlecenia analizy.'}`;
+      btn.disabled = false;
+      return;
+    }
+    resultEl.textContent = `⏳ Zadanie zlecone (${d.order_id}). Przetwarzanie InSAR nie ma ` +
+      'gwarantowanego czasu ukończenia — może potrwać od kilku minut do dłużej. Sprawdzam co 20s…';
+    _pollInsarStatus(d.order_id, resultEl, btn);
+  }catch(e){
+    resultEl.textContent = `✗ Błąd połączenia: ${e.message}`;
+    btn.disabled = false;
+  }
+}
+
+async function _pollInsarStatus(orderId, resultEl, btn, attempt=0){
+  const MAX_ATTEMPTS = 30;   // ~10 minut przy 20s odstępach — potem operator odświeża ręcznie
+  try{
+    const r = await fetch(`/api/insar_coherence/${orderId}`);
+    const d = await r.json();
+    if(!r.ok){
+      resultEl.textContent = `✗ ${d.detail || 'Błąd sprawdzania statusu.'}`;
+      btn.disabled = false;
+      return;
+    }
+    if(d.status !== 'completed'){
+      if(attempt >= MAX_ATTEMPTS){
+        resultEl.textContent = `⏳ Wciąż w toku (status: ${d.status}). Zadanie zlecone w CDSE ` +
+          'bez gwarantowanego czasu ukończenia — spróbuj ponownie za jakiś czas.';
+        btn.disabled = false;
+        return;
+      }
+      setTimeout(() => _pollInsarStatus(orderId, resultEl, btn, attempt + 1), 20000);
+      return;
+    }
+    if(d.disturbance_likely === true){
+      resultEl.innerHTML = `🔴 <strong>${d.message}</strong>`;
+    }else if(d.disturbance_likely === false){
+      resultEl.innerHTML = `🟢 ${d.message}`;
+    }else{
+      resultEl.textContent = `ℹ ${d.message}`;
+    }
+    btn.disabled = false;
+  }catch(e){
+    resultEl.textContent = `✗ Błąd połączenia: ${e.message}`;
+    btn.disabled = false;
+  }
+}
+
+/* Panel eksperta — wielowskaźnikowy wykres */
+let _expertDatasets = [];
+const LAYER_COLORS = {
+  ndvi: '#2D6B1A', evi: '#52A030', savi: '#8BC34A',
+  ndre: '#C47A2E', ndwi: '#1E88E5',
+  vv_db: '#9C27B0', vh_db: '#E91E63', rvi: '#FF9800',
+};
+const LAYER_AXIS = {
+  ndvi:'y1', evi:'y1', savi:'y1', ndre:'y1', ndwi:'y1',
+  vv_db:'y2', vh_db:'y2', rvi:'y1',
+};
+
+function _initExpertPanel(multiData, ndviData){
+  const toggle = document.getElementById('expertToggle');
+  toggle.style.display = 'flex';
+  document.getElementById('expertToggleLbl').textContent = t('expert_toggle_lbl');
+
+  // Zbierz daty i wartości ze wszystkich wskaźników
+  const records = (multiData && Array.isArray(multiData.multi_records))
+    ? multiData.multi_records
+    : ((ndviData?.series || []).map(r => ({
+      date: r.date,
+      ndvi: r.ndvi_mean,
+      valid_frac: r.valid_frac
+    })));
+  const s1recs  = (multiData && Array.isArray(multiData.s1_records))
+    ? multiData.s1_records
+    : [];
+
+  // Indeksuj S1 po dacie
+  const s1map = {};
+  s1recs.forEach(r => { s1map[r.date] = r; });
+
+  // Połącz w jeden timeline
+  const allDates = [...new Set([
+    ...records.map(r => r.date),
+    ...s1recs.map(r => r.date),
+  ])].sort();
+
+  const dataByDate = {};
+  records.forEach(r => { dataByDate[r.date] = {...r}; });
+  s1recs.forEach(r => {
+    if(!dataByDate[r.date]) dataByDate[r.date] = {date: r.date};
+    dataByDate[r.date].vv_db = r.vv_db;
+    dataByDate[r.date].vh_db = r.vh_db;
+    dataByDate[r.date].rvi   = r.rvi;
+  });
+
+  const labels = allDates;
+  const LAYERS = ['ndvi','evi','savi','ndre','ndwi','vv_db','vh_db'];
+
+  _expertDatasets = LAYERS.map(key => ({
+    key,
+    label: key.toUpperCase(),
+    data: labels.map(d => dataByDate[d] ? (dataByDate[d][key] ?? null) : null),
+    borderColor: LAYER_COLORS[key],
+    backgroundColor: LAYER_COLORS[key] + '22',
+    borderWidth: 1.5,
+    showLine: true,
+    pointRadius: 0,
+    pointHoverRadius: 4,
+    yAxisID: LAYER_AXIS[key],
+    hidden: !_activeLayerKeys.has(key),
+    tension: 0.3,
+    spanGaps: true,
+  }));
+
+  // Przyciski warstw
+  const layerWrap = document.getElementById('layerToggles');
+  layerWrap.innerHTML = LAYERS.map(key =>
+    `<button class="layer-btn ${(_activeLayerKeys.has(key) && _expertDatasets.some(d => d.key===key && d.data.some(v => v!=null)))?'on':''}"
+      data-layer="${key}" onclick="toggleLayer('${key}')"
+      style="${(_activeLayerKeys.has(key) && _expertDatasets.some(d => d.key===key && d.data.some(v => v!=null)))?'background:'+LAYER_COLORS[key]+';border-color:'+LAYER_COLORS[key]:''}">
+      ${key.toUpperCase()}
+    </button>`
+  ).join('');
+
+  // Zniszcz poprzedni wykres
+  if(_expertChartInst){ _expertChartInst.destroy(); _expertChartInst = null; }
+
+  const ctx = document.getElementById('expertChart').getContext('2d');
+  _expertChartInst = new Chart(ctx, {
+    type: 'line',
+    data: { labels, datasets: _expertDatasets },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      interaction: { mode:'index', intersect:false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw;
+              if(v == null) return null;
+              const unit = LAYER_AXIS[ctx.dataset.key]==='y2' ? ' dB' : '';
+              return `${ctx.dataset.label}: ${v.toFixed(3)}${unit}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: { ticks:{ font:{size:10}, maxTicksLimit:8 } },
+        y1: { type:'linear', position:'left', min:-0.1, max:1.6,
+               title:{display:true,text:'Indeksy optyczne',font:{size:10}},
+               ticks:{font:{size:10}} },
+        y2: { type:'linear', position:'right', min:-30, max:5,
+               title:{display:true,text:'SAR [dB]',font:{size:10}},
+               ticks:{font:{size:10}},
+               grid:{drawOnChartArea:false} },
+      }
+    }
+  });
+}
+
+function toggleLayer(key){
+  if(_activeLayerKeys.has(key)) _activeLayerKeys.delete(key);
+  else _activeLayerKeys.add(key);
+
+  // Zaktualizuj przycisk
+  document.querySelectorAll('.layer-btn').forEach(btn => {
+    if(btn.dataset.layer === key){
+      btn.classList.toggle('on', _activeLayerKeys.has(key));
+      btn.style.background = _activeLayerKeys.has(key) ? LAYER_COLORS[key] : '';
+      btn.style.borderColor = _activeLayerKeys.has(key) ? LAYER_COLORS[key] : '';
+    }
+  });
+
+  // Pokaż/ukryj dataset
+  if(_expertChartInst){
+    const ds = _expertChartInst.data.datasets.find(d => d.key === key);
+    if(ds){ ds.hidden = !_activeLayerKeys.has(key); _expertChartInst.update('none'); }
+  }
+}
+
+function toggleExpert(){
+  const btn   = document.getElementById('expertToggle');
+  const panel = document.getElementById('expertPanel');
+  btn.classList.toggle('open');
+  panel.classList.toggle('open');
+  // resize wykresu po otwarciu
+  if(panel.classList.contains('open') && _expertChartInst){
+    setTimeout(() => { _expertChartInst.resize(); _expertChartInst.update('none'); }, 140);
+  }
+}
+
+/* ============================================================================
+ * TRYB WSADOWY — wiele działek naraz
+ * ==========================================================================*/
+
+function stripDiacritics(s){
+  return (s || '').toString()
+    .replace(/ł/g, 'l').replace(/Ł/g, 'L') // ł nie ma dekompozycji NFD
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+}
+function norm(s){ return stripDiacritics(s).toLowerCase().trim(); }
+
+function normalizeTyp(v){
+  const s = norm(v);
+  if(!s) return '';
+  // polski
+  if(s.includes('ozim') || s.includes('zimow')) return 'ozimy';
+  if(s.includes('scier') || s.includes('letni')) return 'scierniskowy';
+  // angielski
+  if(s.includes('winter') || s.includes('overwint')) return 'ozimy';
+  if(s.includes('summer') || s.includes('stubble') || s.includes('catch')) return 'scierniskowy';
+  // włoski
+  if(s.includes('invern')) return 'ozimy';
+  if(s.includes('estiv') || s.includes('stoppie')) return 'scierniskowy';
+  return '';
+}
+
+function normalizeMethod(v){
+  const s = norm(v);
+  if(!s) return '';
+  if(s.includes('wal') || s.includes('roll') || s.includes('mulch')) return 'walowanie';
+  if(s.includes('talerz') || s.includes('disc') || s.includes('disk')) return 'talerzowanie';
+  if(s.includes('przyor') || s.includes('plough') || s.includes('plow') || s.includes('incorp')) return 'przyoranie';
+  if(s.includes('opry') || s.includes('spray') || s.includes('herb')) return 'oprysk';
+  return 'inne';
+}
+
+function normalizeDateStr(v){
+  if(v == null || v === '' || v === 'None') return '';
+  // obiekt Date (SheetJS z cellDates:true)
+  if(v instanceof Date && !isNaN(v)) return v.toISOString().slice(0, 10);
+  const s = String(v).trim();
+  if(!s || s === 'None') return '';
+  // ISO format RRRR-MM-DD (z godziną "2025-07-20 00:00:00" lub bez)
+  const isoMatch = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  if(isoMatch) return isoMatch[1];
+  // DD.MM.YYYY lub DD/MM/YYYY lub DD-MM-YYYY
+  const dmyMatch = s.match(/^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})/);
+  if(dmyMatch){ const [, d, mo, y] = dmyMatch; return `${y}-${mo.padStart(2,'0')}-${d.padStart(2,'0')}`; }
+  // Excel serial number
+  const num = parseFloat(s);
+  if(!isNaN(num) && num > 20000 && num < 80000){
+    const d = new Date(Date.UTC(1899, 11, 30) + num * 86400000);
+    return d.toISOString().slice(0, 10);
+  }
+  return '';
+}
+
+function normalizeParcelId(v){
+  // czyści ID działki: usuwa spacje, normalizuje separatory
+  // dopuszcza: cyfry, litery, _ . / - (standard TERYT)
+  if(v == null) return '';
+  return String(v).trim().replace(/\s+/g, '');
+}
+
+function detectColumns(headerRow){
+  const idx = {id: -1, typ: -1, rok: -1, sowDate: -1, termDate: -1, termMethod: -1,
+               phone: -1, name: -1, notes: -1};
+  headerRow.forEach((raw, i) => {
+    const h = norm(raw);
+    if(!h) return;
+    // ID działki — PL/EN/IT
+    // Uwaga: 'nr' dopasowujemy tylko jako początek krótkiego nagłówka
+    // (np. "Nr działki", "Nr TERYT"), a nie jako dowolny substring —
+    // inaczej kolumna z numerem porządkowym wiersza ("Nr", "L.p. nr")
+    // mogłaby zostać błędnie uznana za kolumnę ID działki.
+    if(idx.id === -1 && (
+      h.includes('dzial') || h.includes('teryt') || h === 'id' ||
+      h.includes('parcel') || h.includes('particell') ||
+      (h.startsWith('nr') && h.length < 15))) idx.id = i;
+    // typ poplonu
+    else if(idx.typ === -1 && (
+      h.includes('poplon') || h.includes('rodzaj') || h === 'typ' ||
+      h.includes('cover') || h.includes('crop') || h.includes('coltur') ||
+      h.includes('type'))) idx.typ = i;
+    // rok — "rok siewu" ale nie "data siewu"
+    else if(idx.rok === -1 && h.includes('rok') && !h.includes('dat')) idx.rok = i;
+    else if(idx.rok === -1 && (h === 'year' || h === 'anno')) idx.rok = i;
+    // data siewu
+    else if(idx.sowDate === -1 && (
+      h.includes('siew') || (h.includes('sow') && h.includes('dat')) ||
+      (h.includes('semin') && h.includes('dat')))) idx.sowDate = i;
+    // likwidacja/terminacja — data i sposób
+    else if(h.includes('likwidacj') || h.includes('termin') || h.includes('termination')){
+      if(h.includes('spos') || h.includes('method') || h.includes('metod')) idx.termMethod = i;
+      else idx.termDate = i;
+    }
+    // telefon
+    else if(idx.phone === -1 && (h.includes('tel') || h.includes('phone'))) idx.phone = i;
+    // imię/nazwisko
+    else if(idx.name === -1 && (
+      h.includes('imie') || h.includes('nazwisk') || h.includes('name') || h.includes('nome'))) idx.name = i;
+    // notatki
+    else if(idx.notes === -1 && (h.includes('notat') || h.includes('note') || h.includes('uwag'))) idx.notes = i;
+  });
+  return idx;
+}
+
+function findHeaderRow(sheet){
+  // Szuka prawdziwego wiersza nagłówkowego — musi mieć co najmniej 2 rozpoznawalne kolumny.
+  // Wiersze tytułowe i instrukcje mają tylko 1 komórkę wypełnioną (merged cell).
+  for(let i = 0; i < Math.min(sheet.length, 10); i++){
+    const row = sheet[i];
+    if(!row) continue;
+    // wiersz musi mieć przynajmniej 2 niepuste komórki (nagłówek ma wiele kolumn)
+    const nonEmpty = row.filter(c => c !== '' && c != null).length;
+    if(nonEmpty < 2) continue;
+    // musi zawierac kolumne z ID działki — ale TYLKO jezeli to krotki tekst (max 40 zn)
+    // zeby nie lapac wielkich tytulowych stringow
+    const hasIdCol = row.some(cell => {
+      const h = norm(cell);
+      if(!h || h.length > 40) return false;  // za dlugi = nie naglowek
+      return h.includes('dzial') || h.includes('teryt') || h === 'id' ||
+             h.includes('parcel') || h.includes('particell') ||
+             (h.startsWith('nr') && h.length < 15);
+    });
+    if(hasIdCol) return i;
+  }
+  return 0;
+}
+
+function rowsFromSheetArray(sheet, defaultRok){
+  if(!sheet.length) return [];
+
+  // znajdz wiersz nagłówkowy (może nie być pierwszym wierszem)
+  const headerRowIdx = findHeaderRow(sheet);
+  const headerRow = sheet[headerRowIdx];
+  const idx = detectColumns(headerRow);
+
+  const out = [];
+  for(let i = headerRowIdx + 1; i < sheet.length; i++){
+    const row = sheet[i];
+    if(!row || row.every(c => c === '' || c == null)) continue;
+    const id = idx.id !== -1 ? normalizeParcelId(row[idx.id]) : '';
+    if(!id) continue;
+    const typRaw = idx.typ !== -1 ? row[idx.typ] : '';
+    const typNorm = normalizeTyp(typRaw);
+    const rokRaw = idx.rok !== -1 ? row[idx.rok] : '';
+    const rok = rokRaw && /^\d{4}$/.test(String(rokRaw).trim())
+      ? parseInt(rokRaw, 10) : defaultRok;
+    out.push({
+      parcel_id: id,
+      typ: typNorm,
+      rok: rok,
+      sowing_date:        idx.sowDate    !== -1 ? normalizeDateStr(row[idx.sowDate]) : '',
+      termination_date:   idx.termDate   !== -1 ? normalizeDateStr(row[idx.termDate]) : '',
+      termination_method: idx.termMethod !== -1 ? normalizeMethod(row[idx.termMethod]) : '',
+      farmer_phone:       idx.phone      !== -1 ? String(row[idx.phone] ?? '').trim() : '',
+      farmer_name:        idx.name       !== -1 ? String(row[idx.name]  ?? '').trim() : '',
+      notes:              idx.notes      !== -1 ? String(row[idx.notes] ?? '').trim() : '',
+    });
+  }
+  return out;
+}
+
+function addRowToTable(data){
+  data = data || {};
+  const tbody = document.getElementById('batchTbody');
+  const tr = document.createElement('tr');
+  const defaultRok = document.getElementById('rok').value;
+  const METHOD_OPTIONS = [['', '—'], ['walowanie','Wałowanie'], ['talerzowanie','Talerzowanie'],
+    ['przyoranie','Przyoranie'], ['oprysk','Oprysk'], ['inne','Inne']];
+  tr.innerHTML = `
+    <td><input class="mono" type="text" data-f="parcel_id" value="${esc(data.parcel_id||'')}" placeholder="np. 141201_1.0001.6509"></td>
+    <td><select data-f="typ">
+          <option value="scierniskowy" ${data.typ==='ozimy'?'':'selected'}>Ścierniskowy</option>
+          <option value="ozimy" ${data.typ==='ozimy'?'selected':''}>Ozimy</option>
+        </select></td>
+    <td><input type="number" data-f="rok" value="${data.rok || defaultRok}" min="2016" max="2100"></td>
+    <td><input type="date" data-f="sowing_date" value="${esc(data.sowing_date||'')}"></td>
+    <td><input type="date" data-f="termination_date" value="${esc(data.termination_date||'')}"></td>
+    <td><select data-f="termination_method">
+          ${METHOD_OPTIONS.map(([v,l]) => `<option value="${v}" ${data.termination_method===v?'selected':''}>${l}</option>`).join('')}
+        </select></td>
+    <td><button type="button" class="row-del" title="Usuń wiersz">✕</button></td>`;
+  tr.querySelector('.row-del').addEventListener('click', () => { tr.remove(); updateRowCount(); });
+  tbody.appendChild(tr);
+  updateRowCount();
+}
+function esc(s){
+  return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;');
+}
+function updateRowCount(){
+  const n = document.querySelectorAll('#batchTbody tr').length;
+  document.getElementById('rowCount').textContent = n ? `(${n})` : '';
+}
+
+document.getElementById('addRow').addEventListener('click', () => addRowToTable());
+
+document.getElementById('xlsxFile').addEventListener('change', async e => {
+  const file = e.target.files[0];
+  if(!file) return;
+  const buf = await file.arrayBuffer();
+  const wb = XLSX.read(buf, {type:'array', cellDates:true});
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const sheet = XLSX.utils.sheet_to_json(ws, {header:1, raw:true, defval:''});
+  const defaultRok = parseInt(document.getElementById('rok').value, 10);
+  const rows = rowsFromSheetArray(sheet, defaultRok);
+  document.getElementById('batchTbody').innerHTML = '';
+  rows.forEach(addRowToTable);
+  const err = document.getElementById('batchErr');
+  if(!rows.length){
+    err.textContent = 'Nie udało się rozpoznać żadnego wiersza w pliku. Sprawdź, czy ' +
+      'pierwszy wiersz to nagłówki kolumn, i dodaj wiersze ręcznie jeśli trzeba.';
+    err.style.display = 'block';
+  } else {
+    err.style.display = 'none';
+  }
+});
+
+function collectRowsFromTable(){
+  return Array.from(document.querySelectorAll('#batchTbody tr')).map(tr => {
+    const get = f => tr.querySelector(`[data-f="${f}"]`).value.trim();
+    return {
+      parcel_id: get('parcel_id'), typ: get('typ'), rok: parseInt(get('rok'), 10),
+      sowing_date: get('sowing_date') || null,
+      termination_date: get('termination_date') || null,
+      termination_method: get('termination_date') ? (get('termination_method') || 'inne') : null,
+    };
+  });
+}
+
+let lastBatchItems = [];
+
+document.getElementById('runBatch').addEventListener('click', async () => {
+  const btn = document.getElementById('runBatch');
+  const err = document.getElementById('batchErr');
+  err.style.display = 'none';
+  const rows = collectRowsFromTable();
+  if(!rows.length){
+    err.textContent = 'Dodaj przynajmniej jeden wiersz (wgraj plik albo kliknij "+ Dodaj wiersz").';
+    err.style.display = 'block';
+    return;
+  }
+  for(const r of rows){
+    if(!r.parcel_id){
+      err.textContent = 'Uzupełnij ID działki we wszystkich wierszach.';
+      err.style.display = 'block';
+      return;
+    }
+    if(!['scierniskowy','ozimy'].includes(r.typ)){
+      err.textContent = `Nieprawidłowy rodzaj poplonu w wierszu z ID „${r.parcel_id}” — wybierz ścierniskowy albo ozimy.`;
+      err.style.display = 'block';
+      return;
+    }
+    if(!r.rok || r.rok < 2016 || r.rok > 2100){
+      err.textContent = `Nieprawidłowy rok w wierszu z ID „${r.parcel_id}”.`;
+      err.style.display = 'block';
+      return;
+    }
+  }
+
+  btn.disabled = true; btn.textContent = t('btn_running');
+  document.getElementById('progressBarWrap').style.display = 'block';
+  document.getElementById('batchResults').style.display = 'block';
+
+  try{
+    const resp = await fetch('/api/batch/start', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({items: rows})});
+    const data = await resp.json();
+    if(!resp.ok){
+      const detail = data.detail;
+      const msg = typeof detail === 'string' ? detail
+        : Array.isArray(detail) ? detail.map(e => `${e.loc?.slice(-1)[0]}: ${e.msg}`).join(', ')
+        : JSON.stringify(detail);
+      throw new Error(msg || `Błąd ${resp.status}`);
+    }
+    _activeBatchJobId = data.job_id;
+    pollBatch(data.job_id);
+  }catch(ex){
+    err.textContent = ex.message;
+    err.style.display = 'block';
+    btn.disabled = false; btn.textContent = t('btn_run_batch');
+  }
+});
+
+// jobId aktualnie śledzonego zadania batch — jeśli z jakiegoś powodu
+// (np. przyszła zmiana kodu) dwie pętle pollBatch zaczęłyby działać
+// równolegle, starsza rozpozna że przestała być "aktywną" i przestanie
+// nadpisywać lastBatchItems/UI danymi z nieaktualnego zadania.
+let _activeBatchJobId = null;
+
+async function pollBatch(jobId){
+  const btn = document.getElementById('runBatch');
+  try{
+    const r = await fetch(`/api/batch/status/${jobId}`);
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || `Błąd ${r.status}`);
+    if(_activeBatchJobId !== null && _activeBatchJobId !== jobId) return; // nieaktualna pętla
+    lastBatchItems = data.items;
+    updateBatchProgress(data);
+    renderBatchResults(data.items);
+    if(!data.finished){
+      setTimeout(() => pollBatch(jobId), 1500);
+    } else {
+      btn.disabled = false; btn.textContent = t('btn_run_batch');
+    }
+  }catch(ex){
+    if(_activeBatchJobId !== null && _activeBatchJobId !== jobId) return; // nieaktualna pętla
+    const err = document.getElementById('batchErr');
+    err.textContent = ex.message;
+    err.style.display = 'block';
+    btn.disabled = false; btn.textContent = t('btn_run_batch');
+  }
+}
+
+function updateBatchProgress(data){
+  const pct = data.total ? Math.round(100 * data.done_count / data.total) : 0;
+  document.getElementById('progressFill').style.width = pct + '%';
+  document.getElementById('batchProgress').textContent =
+    `${data.done_count} / ${data.total} ${t('progress_checked')}` + (data.finished ? ` — ${t('progress_done')}` : '…');
+}
+
+function renderBatchResults(items){
+  const buckets = {green: [], yellow: [], red: []};
+  const errors = [];
+  items.forEach((it, idx) => {
+    if(it.state === 'error'){ errors.push({...it, idx}); return; }
+    if(it.state !== 'done') return;
+    const cat = it.manual_category || it.result.category;
+    (buckets[cat] || buckets.yellow).push({...it, idx});
+  });
+
+  function cardHtml(it){
+    const v = it.result.verdict;
+    const s = STATUS(v.status);
+    const termTxt = it.termination_date ? ` · zlikw. ${it.termination_date}` : '';
+    const isManual = !!it.manual_category;
+    const autoCat = it.result.category;
+    const effectiveCat = it.manual_category || autoCat;
+    const isYellow = effectiveCat === 'yellow';
+    const manualBadge = isManual && it.manual_category !== autoCat
+      ? `<div style="color:var(--muted);font-size:10.5px;margin-top:2px">✏️ ${t('manual_override')} (${t('auto_was')}: ${t('cat_'+autoCat)})</div>` : '';
+    const reviewedBadge = isManual && isYellow
+      ? `<div style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#5C7A4A;background:#EAF3DC;border:1px solid #B0D090;border-radius:10px;padding:1px 8px;margin-top:3px;font-weight:600">✓ ${t('reviewed')}</div>` : '';
+    const complianceTxt = v.compliance_issue
+      ? `<div style="color:var(--amber);font-size:11.5px;margin-top:2px">⚠ ${t('compliance_card')}</div>` : '';
+    const lowQualTxt = v.requires_operator_approval
+      ? `<div style="color:var(--amber);font-size:11.5px;margin-top:2px">🌥 ${t('low_qual_card')} (${v.low_quality_scenes||'?'} scen)</div>` : '';
+    // Jawne powody blokady zielonej kategorii (z backendu) — po jednym wierszu.
+    const reasons = it.result.category_reasons || [];
+    const reasonsTxt = (isYellow && reasons.length)
+      ? `<div style="color:var(--muted);font-size:10.5px;margin-top:3px;line-height:1.45">${reasons.map(r=>`• ${esc(r)}`).join('<br>')}</div>` : '';
+    const actionBtn = isYellow
+      ? `<div style="display:flex;gap:5px;margin-top:6px;flex-wrap:wrap"><button class="rc-link" data-idx="${it.idx}">${t('link_details')}</button><span style="color:var(--line)">|</span><button class="rc-link" data-idx="${it.idx}" style="background:none;border:none;color:var(--green-deep);font:600 11.5px 'Inter',sans-serif;cursor:pointer;padding:0;text-decoration:underline">✏️ ${t('change_category')}</button></div>`
+      : `<button class="rc-link" data-idx="${it.idx}" style="margin-top:4px;display:block">${t('link_details')}</button>`;
+    return `<div class="result-card"><div class="rc-id">${esc(it.parcel_id)}</div><div class="rc-meta">${it.typ} · ${it.rok}${termTxt}</div><div class="rc-status">${s.label}${v.confidence?' ('+v.confidence+')':''}</div>${complianceTxt}${lowQualTxt}${reasonsTxt}${manualBadge}${reviewedBadge}${actionBtn}</div>`;
+  }
+
+  function renderSimpleList(elId, list){
+    const el = document.getElementById(elId);
+    if(!list.length){ el.innerHTML = `<p class="empty-hint">${t('empty_results')}</p>`; return; }
+    el.innerHTML = list.map(cardHtml).join('');
+  }
+
+  renderSimpleList('listGreen', buckets.green);
+
+  const yellowUnreviewed = buckets.yellow.filter(it => !it.manual_category);
+  const yellowReviewed   = buckets.yellow.filter(it =>  it.manual_category);
+  const yellowEl = document.getElementById('listYellow');
+  if(!buckets.yellow.length){
+    yellowEl.innerHTML = `<p class="empty-hint">${t('empty_results')}</p>`;
+  } else {
+    let html = yellowUnreviewed.map(cardHtml).join('');
+    if(yellowReviewed.length){
+      if(yellowUnreviewed.length){
+        html += `<div style="display:flex;align-items:center;gap:8px;margin:10px 0 8px"><span style="font-size:10px;color:var(--muted);white-space:nowrap;font-weight:600">✓ ${t('reviewed')}</span><div style="flex:1;border-top:1px dashed var(--line)"></div></div>`;
+      }
+      html += yellowReviewed.map(cardHtml).join('');
+    }
+    yellowEl.innerHTML = html;
+  }
+
+  renderSimpleList('listRed', buckets.red);
+
+  document.getElementById('cntGreen').textContent = buckets.green.length;
+  document.getElementById('cntYellow').textContent = buckets.yellow.length;
+  document.getElementById('cntRed').textContent = buckets.red.length;
+
+  const errBlock = document.getElementById('errorsBlock');
+  if(errors.length){
+    errBlock.style.display='block';
+    document.getElementById('cntError').textContent=errors.length;
+    document.getElementById('listError').innerHTML=errors.map(it=>`<div class="result-card"><div class="rc-id">${esc(it.parcel_id)}</div><div class="rc-meta">${it.typ} · ${it.rok}</div><div class="rc-status" style="color:var(--alert)">${esc(it.error)}</div></div>`).join('');
+  } else { errBlock.style.display='none'; }
+
+  document.querySelectorAll('.rc-link').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const it = lastBatchItems[parseInt(btn.dataset.idx, 10)];
+      if(!it || !it.result) return;
+      _currentBatchIdx = parseInt(btn.dataset.idx, 10);
+      populateSingleForm(it);
+      _cameFromBatch = true;
+      switchTab('single');
+      _showBatchNav(_currentBatchIdx);
+      _lastNdviResult = it.result;
+      showParcel(it.result); drawChart(it.result); showPendingVerdict(); showSatelliteImageLazy(it.result);
+      const multiBody = {
+        parcel_id: it.parcel_id,
+        typ: it.typ,
+        rok: it.rok,
+        include_s1: true
+      };
+      if(it.sowing_date) multiBody.sowing_date = it.sowing_date;
+      if(it.termination_date) multiBody.termination_date = it.termination_date;
+      _startMultiLoad(multiBody, it.result);
+      document.getElementById('viewSingle').scrollIntoView({behavior:'smooth'});
+    });
+  });
+}
+
+/* Uzupełnia formularz pojedynczej działki danymi z klikniętego wiersza
+ * wsadowego, żeby dało się od razu podejrzeć/poprawić i sprawdzić ponownie. */
+let _cameFromBatch = false;
+let _currentBatchIdx = -1;
+
+function returnToBatch(){
+  switchTab('batch');
+  document.getElementById('batchResults').scrollIntoView({behavior:'smooth'});
+  _hideBatchNav();
+  _cameFromBatch = false;
+  _currentBatchIdx = -1;
+}
+
+function _hideBatchNav(){
+  const el = document.getElementById('backToBatch');
+  el.style.display = 'none';
+  const w = document.getElementById('smsWidget');
+  if(w) w.style.display = 'none';
+}
+
+function _showBatchNav(idx){
+  const el = document.getElementById('backToBatch');
+  el.style.display = 'flex';
+  document.getElementById('btnBackBatch').textContent = t('btn_back_batch');
+  document.getElementById('manualCatLabel').textContent = t('manual_cat_label');
+  document.getElementById('manCatGreenLbl').textContent = t('manual_cat_green');
+  document.getElementById('manCatYellowLbl').textContent = t('manual_cat_yellow');
+  document.getElementById('manCatRedLbl').textContent = t('manual_cat_red');
+  _updateManualCatHighlight(idx);
+  _updateSmsWidget(idx);
+}
+
+function _updateManualCatHighlight(idx){
+  if(idx < 0 || !lastBatchItems[idx]) return;
+  const it = lastBatchItems[idx];
+  const cat = it.manual_category || it.result?.category || 'yellow';
+  const styles = {
+    green: {border:'2px solid #1A4A0A', shadow:'0 0 0 2px #EAF3DC'},
+    yellow:{border:'2px solid #C47A2E', shadow:'0 0 0 2px #FEF3E0'},
+    red:   {border:'2px solid #A83020', shadow:'0 0 0 2px #FBEAE8'},
+  };
+  ['green','yellow','red'].forEach(c => {
+    const btn = document.getElementById('manCat'+c.charAt(0).toUpperCase()+c.slice(1));
+    if(btn){
+      btn.style.border = c === cat ? styles[c].border : '';
+      btn.style.boxShadow = c === cat ? styles[c].shadow : '';
+      btn.style.fontWeight = c === cat ? '700' : '600';
+    }
+  });
+}
+
+function setManualCategory(newCat){
+  if(_currentBatchIdx < 0 || !lastBatchItems[_currentBatchIdx]) return;
+  lastBatchItems[_currentBatchIdx].manual_category = newCat;
+  _updateManualCatHighlight(_currentBatchIdx);
+  _updateSmsWidget(_currentBatchIdx);
+  renderBatchResults(lastBatchItems);
+  const label = {green: t('manual_cat_green'), yellow: t('manual_cat_yellow'), red: t('manual_cat_red')}[newCat];
+  const flash = document.getElementById('manualCatFlash');
+  if(flash){ flash.textContent = `✓ ${label}`; flash.style.opacity='1';
+    setTimeout(()=>{ flash.style.opacity='0'; }, 1500); }
+}
+
+function exportResults(){
+  const items = (lastBatchItems || []).filter(it => it && it.state === 'done' && it.result);
+  if(!items.length){
+    alert(t('export_no_results'));
+    return;
+  }
+  if(!window.XLSX){
+    alert('XLSX library unavailable');
+    return;
+  }
+
+  const toRow = (it) => {
+    const v = it.result?.verdict || {};
+    const summary = it.result?.summary || {};
+    const cs = (it.result?.confidence && it.result.confidence.score != null)
+      ? it.result.confidence.score
+      : '';
+    return {
+      parcel_id: it.parcel_id || '',
+      typ: it.typ || '',
+      rok: it.rok || '',
+      kategoria: (it.manual_category || it.result?.category || '').toUpperCase(),
+      status: v.status || '',
+      pewnosc: v.confidence || '',
+      confidence_score: cs,
+      ndvi_peak: summary.ndvi_peak ?? '',
+      valid_scenes: summary.valid_scenes ?? '',
+      low_quality_scenes: v.low_quality_scenes ?? 0,
+      compliance_issue: v.compliance_issue ? 'TAK' : 'NIE',
+      requires_operator_approval: v.requires_operator_approval ? 'TAK' : 'NIE',
+      sowing_date: it.sowing_date || '',
+      termination_date: it.termination_date || '',
+      termination_method: it.termination_method || '',
+    };
+  };
+
+  const allRows = items.map(toRow);
+  const byCat = {
+    green: items.filter(it => (it.manual_category || it.result?.category) === 'green').map(toRow),
+    yellow: items.filter(it => (it.manual_category || it.result?.category) === 'yellow').map(toRow),
+    red: items.filter(it => (it.manual_category || it.result?.category) === 'red').map(toRow),
+  };
+  const sortRows = rows => rows.sort((a,b) => String(a.parcel_id).localeCompare(String(b.parcel_id), 'pl'));
+  sortRows(allRows); sortRows(byCat.green); sortRows(byCat.yellow); sortRows(byCat.red);
+
+  const wb = XLSX.utils.book_new();
+  const mkSheet = rows => XLSX.utils.json_to_sheet(rows.length ? rows : [{}]);
+  XLSX.utils.book_append_sheet(wb, mkSheet(allRows), 'Wyniki');
+  XLSX.utils.book_append_sheet(wb, mkSheet(byCat.green), 'Zielone');
+  XLSX.utils.book_append_sheet(wb, mkSheet(byCat.yellow), 'Żółte');
+  XLSX.utils.book_append_sheet(wb, mkSheet(byCat.red), 'Czerwone');
+
+  const ts = new Date().toISOString().slice(0,19).replace(/[T:]/g,'-');
+  XLSX.writeFile(wb, `poplon_wyniki_${ts}.xlsx`);
+}
+
+function _updateSmsWidget(idx){
+  const widget = document.getElementById('smsWidget');
+  if(!widget) return;
+  const it = idx >= 0 ? lastBatchItems[idx] : null;
+  const effectiveCat = (it && (it.manual_category || it.result?.category)) || 'green';
+  const isYellow = effectiveCat === 'yellow';
+  widget.style.display = isYellow ? 'block' : 'none';
+  if(!isYellow) return;
+
+  // etykiety
+  document.getElementById('smsWidgetLabel').textContent = t('sms_widget_label');
+  document.getElementById('smsSendLabel').textContent = t('sms_send_btn');
+
+  // wstępna wiadomość
+  const parcelId = it?.parcel_id || document.getElementById('pid')?.value || '';
+  const appUrl = window.location.origin;
+  const preMsg = t('sms_pre_message')
+    .replace('{parcel_id}', parcelId)
+    .replace('{url}', appUrl);
+
+  const ta = document.getElementById('smsText');
+  if(ta && (!ta.dataset.userEdited || ta.dataset.parcelId !== parcelId)){
+    ta.value = preMsg;
+    ta.dataset.parcelId = parcelId;
+    ta.dataset.userEdited = '';
+    _updateSmsCount();
+  }
+}
+
+function _updateSmsCount(){
+  const ta = document.getElementById('smsText');
+  const cnt = document.getElementById('smsCharCount');
+  if(!ta || !cnt) return;
+  const n = ta.value.length;
+  cnt.textContent = `${n} / 160`;
+  cnt.style.color = n > 160 ? 'var(--alert)' : 'var(--muted)';
+}
+
+async function sendSmsFromVerdict(){
+  const ta = document.getElementById('smsText');
+  const fb = document.getElementById('smsFeedback');
+  const btn = document.getElementById('smsSendBtn');
+  if(!ta || !ta.value.trim()) return;
+
+  const it = _currentBatchIdx >= 0 ? lastBatchItems[_currentBatchIdx] : null;
+  // numer telefonu: z danych wsadowych lub z pojedynczego formularza.
+  let phone = (it && it.farmer_phone) || document.getElementById('singleFarmerPhone')?.value?.trim() || '';
+
+  if(!phone){
+    const typed = window.prompt(t('sms_phone_prompt'), '');
+    if(typed) phone = typed.trim();
+  }
+  if(!phone){
+    fb.style.display = 'block';
+    fb.style.color = 'var(--alert)';
+    fb.textContent = '✗ ' + t('sms_phone_missing');
+    return;
+  }
+
+  if(btn){ btn.disabled=true; }
+  fb.style.display = 'none';
+  try{
+    const body = {
+      message: ta.value.trim(),
+      parcel_id: it?.parcel_id || '',
+      phone: phone,
+    };
+    const r = await fetch('/api/sms/send', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    fb.style.display = 'block';
+    fb.style.color = r.ok ? 'var(--green-deep)' : 'var(--alert)';
+    fb.textContent = r.ok ? `✓ ${t('sms_sent_ok')} → ${phone}` : `✗ ${d.detail || t('sms_sent_error')}`;
+  }catch(e){
+    fb.style.display = 'block';
+    fb.style.color = 'var(--alert)';
+    fb.textContent = `✗ ${t('sms_sent_error')}: ${e.message}`;
+  }finally{
+    if(btn){ btn.disabled=false; btn.innerHTML=`📤 <span>${t('sms_send_btn')}</span>`; }
+  }
+}
+
+function populateSingleForm(it){
+  document.getElementById('pid').value = it.parcel_id || '';
+  document.getElementById('rok').value = it.rok || document.getElementById('rok').value;
+  document.getElementById('t1').checked = it.typ !== 'ozimy';
+  document.getElementById('t2').checked = it.typ === 'ozimy';
+  document.getElementById('sowDateSingle').value = it.sowing_date || '';
+  const phoneEl = document.getElementById('singleFarmerPhone');
+  if(phoneEl) phoneEl.value = it.farmer_phone || '';
+  const hasTerm = !!it.termination_date;
+  document.getElementById('hasTermination').checked = hasTerm;
+  document.getElementById('terminationFields').style.display = hasTerm ? 'grid' : 'none';
+  document.getElementById('termDate').value = it.termination_date || '';
+  if(it.termination_method) document.getElementById('termMethod').value = it.termination_method;
+}
+
+addRowToTable();
+</script>
+
+<!-- ====================== TRYB: MONITORING SEZONU ======================== -->
+<div class="page-monitor" id="viewMonitor" style="display:none">
+
+  <div class="monitor-grid" style="margin-bottom:20px">
+
+    <!-- PANEL A: dodaj działkę -->
+    <section class="card">
+      <div class="card-h">Dodaj działkę do monitoringu</div>
+      <div class="card-b">
+        <div class="field">
+          <label id="lbl_mon_pid">ID działki <span class="hint" id="hint_mon_pid">(TERYT)</span></label>
+          <input class="mono" type="text" id="monPid" placeholder="np. 141201_1.0001.6509">
+        </div>
+        <div class="field">
+          <label id="lbl_mon_typ">Rodzaj poplonu</label>
+          <div class="radio-grid" role="radiogroup">
+            <input type="radio" name="monTyp" id="monT1" value="scierniskowy" checked>
+            <label for="monT1"><b>Ścierniskowy</b><small>letni</small></label>
+            <input type="radio" name="monTyp" id="monT2" value="ozimy">
+            <label for="monT2"><b>Ozimy</b><small>jesienny</small></label>
+          </div>
+        </div>
+        <div class="row2 field">
+          <div>
+            <label id="lbl_mon_rok">Rok siewu</label>
+            <input type="number" id="monRok" min="2016" max="2100">
+          </div>
+          <div>
+            <label id="lbl_mon_sow">Data siewu <span class="hint" id="hint_opt_short">(opcja)</span></label>
+            <input type="date" id="monSowDate">
+          </div>
+        </div>
+        <div class="row2 field">
+          <div>
+            <label id="lbl_mon_phone">Tel. rolnika <span class="hint">(SMS)</span></label>
+            <input type="tel" id="monPhone" placeholder="+48600000000">
+          </div>
+          <div>
+            <label id="lbl_mon_name">Imię/nazwisko <span class="hint" id="hint_opt2">(opcja)</span></label>
+            <input type="text" id="monName" placeholder="Jan Kowalski">
+          </div>
+        </div>
+        <div class="field">
+          <label id="lbl_mon_notes">Notatki <span class="hint">(opcja)</span></label>
+          <textarea id="monNotes" rows="2" style="width:100%;border:1px solid var(--line);
+            border-radius:7px;padding:9px;font:inherit;resize:vertical"
+            placeholder="Uwagi operatora..."></textarea>
+        </div>
+        <button class="primary" id="monAddBtn" type="button" onclick="monitorAdd()">Dodaj do monitoringu</button>
+        <div class="error" id="monAddErr" style="margin-top:10px"></div>
+        <div id="monAddOk" style="display:none;margin-top:10px;padding:10px;
+          background:#EAF3EC;border-radius:7px;color:var(--green-deep);font-size:13px">
+          ✅ Działka dodana do monitoringu
+        </div>
+      </div>
+    </section>
+
+    <!-- PANEL C: kalibracja -->
+    <section class="card">
+      <div class="card-h">Kalibracja progów NDVI</div>
+      <div class="card-b">
+        <div id="calStatus" style="font-size:13px;color:var(--muted)">Ładowanie...</div>
+        <div style="margin-top:14px">
+          <button class="secondary" type="button" onclick="loadCalibration()">Sprawdź sugestię kalibracji</button>
+        </div>
+        <div id="calSuggestion" style="display:none;margin-top:14px"></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- PANEL B: lista działek -->
+  <section class="card">
+    <div class="card-h" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Monitorowane działki</span>
+      <button class="secondary" type="button" style="font-size:12px;padding:5px 10px"
+        onclick="loadMonitorList()">⟳ Odśwież</button>
+    </div>
+    <div class="card-b">
+      <div id="monList"><p class="empty-hint" style="padding:20px 0;text-align:center">
+        Ładowanie listy działek...</p></div>
+    </div>
+  </section>
+
+</div>
+
+<script>
+/* === ZAKŁADKA MONITORING === */
+
+document.getElementById('tabMonitor').addEventListener('click', () => switchTab('monitor'));
+
+const _origSwitchTab = switchTab;
+switchTab = function(mode){
+  document.getElementById('tabMonitor').classList.toggle('active', mode === 'monitor');
+  document.getElementById('viewMonitor').style.display = mode === 'monitor' ? 'block' : 'none';
+  _origSwitchTab(mode);
+  if(mode === 'monitor'){
+    loadMonitorList();
+    loadCalibrationStatus();
+  }
+};
+
+document.getElementById('monRok').value = (function(){
+  const now = new Date();
+  return now.getMonth() >= 6 ? now.getFullYear() : now.getFullYear() - 1;
+})();
+
+async function monitorAdd(){
+  const btn = document.getElementById('monAddBtn');
+  const err = document.getElementById('monAddErr');
+  const ok = document.getElementById('monAddOk');
+  err.style.display = 'none'; ok.style.display = 'none';
+  const parcel_id = document.getElementById('monPid').value.trim();
+  if(!parcel_id){ err.textContent='Wpisz ID działki'; err.style.display='block'; return; }
+  btn.disabled = true; btn.textContent = 'Dodawanie...';
+  try{
+    const body = {
+      parcel_id,
+      typ: document.querySelector('input[name=monTyp]:checked').value,
+      rok: parseInt(document.getElementById('monRok').value),
+    };
+    const phone = document.getElementById('monPhone').value.trim();
+    const name = document.getElementById('monName').value.trim();
+    const notes = document.getElementById('monNotes').value.trim();
+    const sow = document.getElementById('monSowDate').value;
+    if(phone) body.farmer_phone = phone;
+    if(name) body.farmer_name = name;
+    if(notes) body.notes = notes;
+    if(sow) body.sowing_date = sow;
+    const r = await fetch('/api/monitor/add', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await r.json();
+    if(!r.ok) throw new Error(data.detail || 'Błąd '+r.status);
+    ok.style.display = 'block';
+    document.getElementById('monPid').value = '';
+    loadMonitorList();
+  }catch(ex){
+    err.textContent = ex.message; err.style.display = 'block';
+  }finally{
+    btn.disabled = false; btn.textContent = t('btn_add_monitor');
+  }
+}
+
+function renderSparkline(obs, width=140, height=44){
+  if(!obs || obs.length < 2)
+    return `<svg width="${width}" height="${height}"><text x="4" y="22" font-size="10" fill="#9AA598">brak danych</text></svg>`;
+  const vals = obs.map(o => o.ndvi_mean);
+  const mn = Math.min(...vals, 0), mx = Math.max(...vals, 0.8);
+  const xStep = (width - 8) / Math.max(obs.length - 1, 1);
+  const yScale = v => height - 4 - ((v - mn) / (mx - mn + 0.001)) * (height - 8);
+  const pts = obs.map((o, i) => `${(4 + i * xStep).toFixed(1)},${yScale(o.ndvi_mean).toFixed(1)}`).join(' ');
+  const lastVal = vals[vals.length - 1];
+  const lineColor = lastVal >= 0.30 ? '#2F7A46' : '#B23B2A';
+  return `<svg width="${width}" height="${height}" style="display:block">
+    <line x1="0" y1="${yScale(0.42).toFixed(1)}" x2="${width}" y2="${yScale(0.42).toFixed(1)}"
+      stroke="#2F7A46" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>
+    <line x1="0" y1="${yScale(0.30).toFixed(1)}" x2="${width}" y2="${yScale(0.30).toFixed(1)}"
+      stroke="#A87716" stroke-width="1" stroke-dasharray="3,2" opacity="0.5"/>
+    <polyline points="${pts}" fill="none" stroke="${lineColor}" stroke-width="2"
+      stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function _dateMinus1(dateStr){
+  // zwraca date o 1 dzien wczesniej (opoznienie danych satelitarnych)
+  if(!dateStr || dateStr === '—') return '—';
+  try {
+    const d = new Date(dateStr + 'T12:00:00');
+    d.setDate(d.getDate() - 1);
+    return d.toISOString().slice(0, 10);
+  } catch(e){ return dateStr; }
+}
+
+function _lastCheckedLabel(lastChecked){
+  // formatuje date ostatniej aktualizacji danych (ze skorygowaniem o 1 dzien)
+  if(!lastChecked) return null;
+  try {
+    const raw = lastChecked.replace(' ','T');
+    const d = new Date(raw);
+    if(isNaN(d)) return null;
+    d.setDate(d.getDate() - 1);
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const dDay = new Date(d); dDay.setHours(0,0,0,0);
+    const diffDays = Math.round((today - dDay) / 86400000);
+    const dateStr = d.toISOString().slice(0,10);
+    if(diffDays === 0) return currentLang==='pl' ? `dziś (${dateStr})` : `today (${dateStr})`;
+    if(diffDays === 1) return currentLang==='pl' ? `wczoraj (${dateStr})` : `yesterday (${dateStr})`;
+    return currentLang==='pl' ? `${diffDays} dni temu (${dateStr})` : `${diffDays} days ago (${dateStr})`;
+  } catch(e){ return null; }
+}
+
+function renderMonitorCard(p){
+  const statusClass = {active:'status-active',alarm:'status-alarm',completed:'status-completed'}[p.status]||'status-active';
+  const statusLabel = {active: t('status_active'), alarm: t('status_alarm'), completed: t('status_completed')}[p.status]||p.status;
+  const obs = p.recent_observations || [];
+  const alarms = p.active_alarms || [];
+  const lastNdvi = obs.length ? obs[obs.length-1].ndvi_mean.toFixed(3) : '—';
+  const lastObsDate = obs.length ? obs[obs.length-1].obs_date : '—';
+  // data satelitarna: wyswietlamy dzien wczesniej (opoznienie danych)
+  const lastObsDateDisplay = _dateMinus1(lastObsDate);
+  // data ostatniej aktualizacji z schedulera
+  const lastCheckedLabel = _lastCheckedLabel(p.last_checked_at);
+
+  const alarmHtml = alarms.map(a => `
+    <div class="alarm-banner">
+      <span>⚠ <b>${esc(a.alarm_type)}</b> (${esc(a.alarm_date)}) NDVI=${(a.ndvi_value||0).toFixed(2)}<br>
+      <small style="color:var(--muted)">${esc((a.message||'').substring(0,120))}</small></span>
+      <button class="secondary" style="font-size:11px;white-space:nowrap;flex-shrink:0"
+        onclick="resolveAlarm(${p.id},${a.id})">${t('btn_resolve')}</button>
+    </div>`).join('');
+
+  const updateBadge = lastCheckedLabel
+    ? `<div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;
+        color:var(--muted);background:#F3F5F0;border:1px solid var(--line);
+        border-radius:12px;padding:2px 9px;margin-top:4px">
+        <span style="color:#2F7A46">●</span>
+        ${currentLang==='pl' ? 'Dane z: ' : 'Data from: '}<b>${lastCheckedLabel}</b>
+      </div>`
+    : `<div style="display:inline-flex;align-items:center;gap:5px;font-size:11px;
+        color:var(--muted);background:#F3F5F0;border:1px solid var(--line);
+        border-radius:12px;padding:2px 9px;margin-top:4px">
+        <span style="color:#A87716">●</span>
+        ${currentLang==='pl' ? 'Jeszcze nie sprawdzano' : 'Not yet checked'}
+      </div>`;
+
+  return `<div class="monitor-card">
+    <div class="monitor-card-head">
+      <span class="mono" style="font-weight:600;font-size:13.5px">${esc(p.parcel_id)}</span>
+      <span class="status-badge ${statusClass}">${statusLabel}</span>
+    </div>
+    <div class="monitor-meta">${esc(p.typ)} · ${esc(p.rok)}
+      ${p.farmer_name ? ' · '+esc(p.farmer_name) : ''}
+      ${p.farmer_phone ? ' · <a href="tel:'+esc(p.farmer_phone)+'" style="color:var(--muted)">'+esc(p.farmer_phone)+'</a>' : ''}
+    </div>
+    ${updateBadge}
+    <div class="sparkline-wrap" style="margin-top:8px">${renderSparkline(obs)}</div>
+    <div style="font-size:11.5px;color:var(--muted)">
+      ${t('mon_last_obs')} <b>${lastNdvi}</b>
+      (${currentLang==='pl' ? 'dane z' : 'data from'} ${lastObsDateDisplay})
+      · ${currentLang==='pl' ? 'łącznie' : 'total'} ${obs.length} ${t('mon_observations')}
+    </div>
+    ${alarmHtml}
+    <div class="monitor-actions">
+      <button class="secondary" style="font-size:12px" type="button"
+        onclick="removeParcel(${p.id})">${t('btn_remove')}</button>
+      <button class="secondary" style="font-size:12px" type="button"
+        onclick="checkNow()">${t('btn_check_now')}</button>
+      ${p.farmer_phone ? `<button class="secondary" style="font-size:12px" type="button"
+        data-phone="${esc(p.farmer_phone)}"
+        onclick="_exportFarmerPdf(this)">📄 Raport zbiorczy (rolnik)</button>` : ''}
+    </div>
+  </div>`;
+}
+
+/* Zbiorczy raport PDF wszystkich monitorowanych działek jednego rolnika
+ * (grupowanie po numerze telefonu — patrz db.get_monitored_parcels_by_farmer_phone
+ * i endpoint /api/farmer_report_pdf w app.py). */
+function _exportFarmerPdf(btn){
+  const phone = btn.dataset.phone;
+  if(!phone) return;
+  window.open(`/api/farmer_report_pdf?farmer_phone=${encodeURIComponent(phone)}`, '_blank');
+}
+
+async function loadMonitorList(){
+  const el = document.getElementById('monList');
+  try{
+    const r = await fetch('/api/monitor/list?status=active');
+    const data = await r.json();
+    if(!data.length){
+      el.innerHTML = `<p class="empty-hint" style="padding:24px 0;text-align:center">${esc(t('mon_empty')).replace(/\n/g,'<br>')}</p>`;
+      return;
+    }
+    el.innerHTML = data.map(renderMonitorCard).join('');
+  }catch(e){
+    el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
+  }
+}
+
+async function resolveAlarm(parcelId, alarmId){
+  await fetch(`/api/monitor/${parcelId}/alarm/${alarmId}/resolve`, {method:'POST'});
+  loadMonitorList();
+}
+
+async function removeParcel(parcelId){
+  if(!confirm(t('confirm_remove'))) return;
+  await fetch(`/api/monitor/${parcelId}`, {method:'DELETE'});
+  loadMonitorList();
+}
+
+async function checkNow(){
+  const r = await fetch('/api/monitor/check_now', {method:'POST'});
+  const d = await r.json();
+  if(d.status === 'started'){
+    alert(t('check_now_msg'));
+    setTimeout(loadMonitorList, 30000);
+  }
+}
+
+async function loadCalibrationStatus(){
+  try{
+    const r = await fetch('/api/calibration/status');
+    const d = await r.json();
+    document.getElementById('calStatus').innerHTML = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div><div style="font-size:11px;color:var(--muted)">NDVI_COVER_HIGH</div>
+             <div style="font-size:22px;font-weight:700;color:var(--green-deep)">${d.current_cover_high}</div></div>
+        <div><div style="font-size:11px;color:var(--muted)">NDVI_COVER_MID</div>
+             <div style="font-size:22px;font-weight:700;color:var(--amber)">${d.current_cover_mid}</div></div>
+      </div>
+      <div style="font-size:12px;color:var(--muted)">
+        ${t('photos_total')} ${d.total_photos} · ${d.analyzed_photos} ${t('photos_analyzed')}<br>
+        ${t('photos_usable')}: ${d.usable_for_calibration} / ${d.min_samples_required} ${t('photos_required')}
+        ${d.last_calibration ? '<br>'+t('last_cal')+' '+d.last_calibration.changed_at : ''}
+      </div>`;
+  }catch(e){ document.getElementById('calStatus').textContent = t('cal_no_data'); }
+}
+
+async function loadCalibration(){
+  const el = document.getElementById('calSuggestion');
+  el.style.display = 'block'; el.innerHTML = t('checking_cal');
+  try{
+    const r = await fetch('/api/calibration/suggest');
+    const data = await r.json();
+    if(data.status === 'not_enough_data'){
+      el.innerHTML = `<p style="color:var(--muted);font-size:13px">${t('cal_not_enough')}
+        (${data.current_samples}/${data.min_samples} ${t('cal_photos_of')}).</p>`;
+      return;
+    }
+    el.innerHTML = `
+      <div style="font-size:13px">
+        <p style="margin-bottom:8px"><b>${t('cal_suggestion')} ${data.total_samples} ${t('cal_photos')}
+          (${data.vegetation_samples} ${t('cal_veg')}, ${data.bare_samples} ${t('cal_bare')}):</b></p>
+        <table style="width:100%;font-size:12.5px;border-collapse:collapse;margin-bottom:12px">
+          <tr style="color:var(--muted);font-size:11px">
+            <th style="text-align:left;padding:4px">${t('col_threshold')}</th>
+            <th style="padding:4px">${t('col_current')}</th><th style="padding:4px">${t('col_suggested')}</th></tr>
+          <tr><td style="padding:4px">NDVI_COVER_HIGH</td>
+              <td style="text-align:center">${data.current_cover_high}</td>
+              <td style="text-align:center;color:var(--green-deep);font-weight:600">
+                ${data.suggested_cover_high}</td></tr>
+          <tr><td style="padding:4px">NDVI_COVER_MID</td>
+              <td style="text-align:center">${data.current_cover_mid}</td>
+              <td style="text-align:center;color:var(--green-deep);font-weight:600">
+                ${data.suggested_cover_mid}</td></tr>
+        </table>
+        <button class="primary" type="button" style="width:auto;padding:9px 18px"
+          onclick="applyCalibration(${data.suggested_cover_high},${data.suggested_cover_mid})">
+          ${t('btn_apply_cal')}</button>
+      </div>`;
+  }catch(e){ el.innerHTML = `<p style="color:var(--alert)">${t('cs_error')}: ${esc(e.message)}</p>`; }
+}
+
+async function applyCalibration(newHigh, newMid){
+  if(!confirm(`${t('confirm_cal')}${newHigh}, COVER_MID=${newMid}?`)) return;
+  const r = await fetch('/api/calibration/apply', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({new_cover_high: newHigh, new_cover_mid: newMid})});
+  const data = await r.json();
+  if(data.status === 'ok'){
+    alert(t('cal_ok'));
+    loadCalibrationStatus();
+    document.getElementById('calSuggestion').style.display = 'none';
+  } else {
+    alert(t('err_unknown') + (data.detail || ''));
+  }
+}
+</script>
+
+<script>
+/* ===== SYSTEM TŁUMACZEŃ i18n ===== */
+
+const TRANSLATIONS = {
+  pl: {
+    // nagłówek
+    app_title:   'Weryfikacja poplonów <span>· Sentinel-2 NDVI</span>',
+    app_tagline: 'Działka ewidencyjna → przebieg wegetacji z satelity → ocena, czy poplon faktycznie rósł',
+    tab_single:  'Pojedyncza działka',
+    tab_batch:   'Wiele działek naraz',
+    tab_monitor: 'Monitoring sezonu',
+    lang_btn:    '🌐 EN',
+
+    // formularz pojedynczy
+    card_data:        'Dane do weryfikacji',
+    lbl_pid:          'Identyfikator działki',
+    lbl_typ:          'Rodzaj poplonu',
+    lbl_rok:          'Rok siewu',
+    lbl_sow:          'Data siewu',
+    lbl_single_phone: 'Tel. rolnika',
+    hint_optional:    '(opcjonalnie)',
+    lbl_term_check:   'Poplon został zlikwidowany przed końcem oceny',
+    lbl_term_date:    'Data likwidacji',
+    lbl_term_method:  'Sposób likwidacji',
+    btn_check:        'Sprawdź działkę',
+    btn_checking:     'Pobieram dane satelitarne…',
+
+    // mapa i wykres
+    card_map:         'Działka na ortofotomapie',
+    map_placeholder:  'Kontur działki pojawi się po sprawdzeniu',
+    card_chart:       'Przebieg NDVI',
+    sat_hint_prefix:  '🛰️ Dostępne zdjęcie satelitarne z dnia szczytu NDVI (',
+    sat_hint_suffix:  ') — wybierz je w menu warstw (ikona w prawym górnym rogu mapy).',
+
+    // typy poplonów
+    typ_sc_label: 'Ścierniskowy',
+    typ_sc_sub:   'letni · ocena wrzesień–połowa października',
+    typ_oz_label: 'Ozimy',
+    typ_oz_sub:   'ocena jesień + okrywa do połowy lutego',
+
+    // sposoby likwidacji
+    term_walowanie:   'Wałowanie',
+    term_talerzowanie:'Lekkie talerzowanie',
+    term_przyoranie:  'Przyoranie',
+    term_oprysk:      'Oprysk herbicydem',
+    term_inne:        'Inny sposób',
+
+    // werdykt
+    status_OBECNY:          'POPLON OBECNY',
+    status_PRAWDOPODOBNY:   'POPLON PRAWDOPODOBNY',
+    status_BRAK:            'BRAK POPLONU',
+    status_NIEROZSTRZYGNIETE:'NIEROZSTRZYGNIĘTE',
+    conf_prefix:            'pewność oceny: ',
+    compliance_badge:       '· wymaga sprawdzenia zgodności z terminami programu',
+    low_quality_badge:      '· dane częściowe — wymaga zatwierdzenia operatora',
+    low_quality_banner:     'scen w oknie oceny pochodzi ze strefy obniżonej jakości (valid_frac 0.35–0.50, czyli 50–65% chmur) — wynik jest prawdopodobny, ale wymaga zatwierdzenia przez operatora zanim trafi do raportu.',
+
+    // tryb wsadowy
+    card_upload:    'Wgraj plik (Excel .xlsx/.xls lub .csv)',
+    upload_hint:    'Rozpoznawane kolumny (dowolna kolejność, wielkość liter bez znaczenia): ID działki (np. "działka", "TERYT") i rodzaj poplonu ("poplon", "rodzaj", "typ"), opcjonalnie rok, data siewu, data likwidacji i sposób likwidacji.',
+    card_parcels:   'Działki do sprawdzenia',
+    th_id:          'ID działki',
+    th_typ:         'Rodzaj',
+    th_rok:         'Rok',
+    th_sow:         'Data siewu',
+    th_term_date:   'Likwidacja — data',
+    th_term_method: 'Likwidacja — sposób',
+    btn_add_row:    '+ Dodaj wiersz',
+    btn_run_batch:  'Sprawdź wszystkie działki',
+    btn_running:    'Uruchamiam…',
+    card_results:   'Wyniki',
+    col_green:      '🟢 OK',
+    col_yellow:     '🟡 Do interpretacji agronoma',
+    col_red:        '🔴 Odrzucone',
+    col_errors:     '⚠ Błędy danych (nie ocena agronomiczna)',
+    empty_results:  'Brak wyników w tej kategorii jeszcze.',
+    link_details:   'Zobacz szczegóły →',
+    compliance_card:'⚠ sprawdź zgodność z terminami programu',
+    low_qual_card:  'dane częściowe — wymaga zatwierdzenia operatora',
+
+    // monitoring
+    card_add_monitor: 'Dodaj działkę do monitoringu',
+    lbl_mon_pid:      'ID działki (TERYT)',
+    lbl_mon_typ:      'Rodzaj poplonu',
+    lbl_mon_rok:      'Rok siewu',
+    lbl_mon_sow:      'Data siewu',
+    hint_opt_short:   '(opcja)',
+    lbl_mon_phone:    'Tel. rolnika (SMS alarmowy)',
+    lbl_mon_name:     'Imię/nazwisko',
+    hint_opt2:        '(opcja)',
+    lbl_mon_notes:    'Notatki',
+    btn_add_monitor:  'Dodaj do monitoringu',
+    btn_adding:       'Dodawanie...',
+    mon_added_ok:     '✅ Działka dodana do monitoringu',
+    card_calibration: 'Kalibracja progów NDVI',
+    btn_check_cal:    'Sprawdź sugestię kalibracji',
+    cal_loading:      'Ładowanie...',
+    card_mon_list:    'Monitorowane działki',
+    btn_refresh:      '⟳ Odśwież',
+    mon_list_loading: 'Ładowanie listy działek...',
+    mon_empty:        'Brak aktywnych działek w monitoringu.\nDodaj pierwszą działkę powyżej.',
+    status_active:    'Aktywny',
+    status_alarm:     'ALARM',
+    status_completed: 'Zakończony',
+    mon_last_obs:     'Ostatni pomiar:',
+    mon_observations: 'obserwacji',
+    btn_remove:       'Usuń z monitoringu',
+    btn_check_now:    '▶ Sprawdź teraz (wszystkie)',
+    btn_resolve:      'Rozwiąż',
+    cal_no_data:      'Brak danych kalibracji.',
+    cal_not_enough:   'Za mało danych do kalibracji',
+    cal_photos_of:    'zdjęć z analizą AI',
+    cal_suggestion:   'Sugestia na podstawie',
+    cal_photos:       'zdjęć',
+    cal_veg:          'z poplonem',
+    cal_bare:         'goła gleba',
+    col_threshold:    'Próg',
+    col_current:      'Aktualna',
+    col_suggested:    'Sugerowana',
+    btn_apply_cal:    'Zatwierdź nowe progi',
+    cal_ok:           'Progi zaktualizowane pomyślnie!',
+    err_unknown:      'Błąd: ',
+    confirm_remove:   'Usunąć działkę z monitoringu?',
+    confirm_cal:      'Zmienić progi na COVER_HIGH=',
+    check_now_msg:    'Sprawdzanie uruchomione w tle. Lista odświeży się za ok. 30 sekund.',
+    footer_txt:       'Dane: Sentinel-2 L2A (Copernicus Data Space Ecosystem), geometrie działek: ULDK GUGiK, podkład: ortofotomapa Geoportal. Wynik ma charakter poglądowy — nie zastępuje kontroli na miejscu.',
+    no_data_sparkline:'brak danych',
+    checking_cal:     'Sprawdzanie danych...',
+    photos_total:     'Zdjęcia:',
+    photos_analyzed:  'przeanalizowane przez AI',
+    photos_usable:    'Używalne do kalibracji',
+    photos_required:  'wymaganych',
+    last_cal:         'Ostatnia kalibracja:',
+    no_cal_data:      'Brak danych kalibracji.',
+    err_load:         'Błąd ładowania:',
+    err_cal:          'Błąd:',
+    // chipy metryk werdyktu
+    chip_baza:        'baza',
+    chip_szczyt:      'szczyt',
+    chip_przyrost:    'przyrost',
+    chip_zima:        'zima',
+    chip_sceny:       'sceny',
+    chip_dni_siewu:   'dni od siewu do szczytu',
+    // legenda wykresu
+    leg_ndvi:         'NDVI — zieloność okrywy (sceny wiarygodne)',
+    leg_cloudy:       'sceny zachmurzone (pominięte w ocenie)',
+    leg_baseline:     'okno bazowe (ściernisko)',
+    leg_cover:        'okno oceny okrywy',
+    leg_winter:       'okno zimowe',
+    // krótkie opisy wskaźników w legendzie pod wykresem
+    leg_evi_desc:     '— gęsta biomasa, bez saturacji',
+    leg_savi_desc:    '— koryguje wpływ gołej gleby',
+    leg_ndre_desc:    '— chlorofil, wczesny stres roślin',
+    leg_ndwi_desc:    '— uwodnienie: sucha czy żywa okrywa',
+    leg_rvi_desc:     '— radar, widzi przez chmury',
+    // wyjaśnienia wskaźników w dymku po najechaniu na punkt pomiaru
+    tip_ndvi:   'Podstawowy wskaźnik zieloności okrywy. Przy bardzo gęstej biomasie saturuje — przestaje rosnąć mimo dalszego przyrostu.',
+    tip_evi:    'Ulepszony wskaźnik zieloności, odporny na saturację. Lepiej niż NDVI rozróżnia gęstą, dobrze rozwiniętą okrywę.',
+    tip_savi:   'NDVI z poprawką na odbicie od gołej gleby. Wiarygodniejszy przy rzadkiej okrywie i we wczesnej fazie wzrostu.',
+    tip_ndre:   'Oparty na paśmie red-edge, wrażliwy na zawartość chlorofilu. Wychwytuje stres roślin, zanim stanie się widoczny w NDVI.',
+    tip_ndwi:   'Pokazuje uwodnienie roślin i gleby. Pomaga odróżnić żywą okrywę od suchej ścierni i resztek pożniwnych.',
+    tip_rvi:    'Wskaźnik radarowy z Sentinel-1 — działa niezależnie od chmur, więc uzupełnia dane optyczne w pochmurne dni. Linia jest wygładzona (mediana z 3 pomiarów), bo surowy sygnał radaru mocno szumi. Ma własną skalę — oś po prawej.',
+    tip_measured: 'pomiar',
+    tip_cloudy: 'Scena odrzucona z oceny — za dużo chmur lub cieni. Wartość pokazana wyłącznie poglądowo.',
+    // etykiety pionowych znaczników na wykresie
+    ev_sowing:            'siew',
+    ev_termination:       'likwidacja',
+    ev_confirmed_tillage: 'potwierdzony incydent',
+    ev_possible_tillage:  'incydent',
+    ev_radar_only:        'incydent (radar)',
+    // przycisk powrotu do wyników wsadowych
+    btn_back_batch:   '← Wróć do wyników',
+    progress_checked: 'sprawdzonych',
+    progress_done:    'gotowe',
+    manual_cat_label: 'Zmień kategorię:',
+    manual_cat_green: 'OK',
+    manual_cat_yellow:'Do agronoma',
+    manual_cat_red:   'Odrzucone',
+    manual_override:  'ręcznie',
+    auto_was:         'auto',
+    cat_green:        'OK',
+    cat_yellow:       'Do agronoma',
+    cat_red:          'Odrzucone',
+    change_category:  'Zmień kategorię',
+    reviewed:         'Przejrzane',
+    btn_export:       'Eksportuj',
+    cs_loading:       'Ładuję dane multi-spektralne…',
+    cs_label:         'Pewność poplonu',
+    cs_no_data:       'Brak danych do oceny',
+    cs_error:         'Błąd ładowania',
+    cs_unavailable:   'Pełna analiza niedostępna — pokazuję wynik NDVI',
+    cs_alt_note:      'bez wymogu wiarygodnej sceny: {score}% ({date})',
+    analysis_pending_status:'ANALIZA W TOKU',
+    analysis_pending_conf:  'werdykt i kategoria po pełnej analizie wielowskaźnikowej',
+    analysis_pending_details:'Trwa obliczanie EVI/SAVI/NDRE/NDWI i fuzja z danymi SAR. Końcowa ocena pojawi się po zakończeniu tego kroku.',
+    analysis_failed_details:'Pełna analiza nie powiodła się. Pokazano status nierozstrzygnięty.',
+    expert_toggle_lbl:'▶ Panel eksperta — indeksy szczegółowe',
+    biomass_unit:     't s.m./ha',
+    co2_unit:         't CO₂eq/ha',
+    biomass_caveat:   'Szacunek modelowy (indeksy satelitarne), nie pomiar terenowy — model przeniesiony z innych upraw, traktuj jako orientacyjny zakres.',
+    biomass_at_cap:   'Wartość na granicy modelu — rzeczywista biomasa może być wyższa.',
+    sms_widget_label: 'Wyślij SMS do rolnika z prośbą o zdjęcie weryfikujące',
+    sms_send_btn:     'Wyślij SMS',
+    sms_sent_ok:      'SMS wysłany',
+    sms_sent_error:   'Błąd wysyłania SMS',
+    sms_phone_prompt: 'Podaj numer telefonu rolnika do wysyłki SMS:',
+    sms_phone_missing:'Brak numeru telefonu rolnika — uzupełnij go w formularzu lub pliku Excel.',
+    sms_pre_message:  'Dzień dobry. System wykrył niepewność w ocenie NDVI dla działki {parcel_id}. Prosimy o wykonanie zdjęcia pola i przesłanie go przez link: {url}/photos lub odpowiedź SMS z opisem aktualnego stanu uprawy. Dziękujemy.',
+    export_no_results:'Brak wyników wsadowych do eksportu.',
+    manual_cat_label: 'Zmień kategorię:',
+    manual_cat_green: 'OK',
+    manual_cat_yellow:'Do agronoma',
+    manual_cat_red:   'Odrzucone',
+    manual_override:  'ręcznie zmienione',
+    auto_was:         'auto',
+    cat_green:        'OK',
+    cat_yellow:       'Do agronoma',
+    cat_red:          'Odrzucone',
+    change_category:  'Zmień kategorię',
+  },
+
+  en: {
+
+    app_title:   'Cover Crop Verification <span>· Sentinel-2 NDVI</span>',
+    app_tagline: 'Land parcel → satellite vegetation timeline → assessment whether cover crop actually grew',
+    tab_single:  'Single parcel',
+    tab_batch:   'Multiple parcels',
+    tab_monitor: 'Season monitoring',
+    lang_btn:    '🌐 PL',
+
+    card_data:        'Verification data',
+    lbl_pid:          'Parcel ID',
+    lbl_typ:          'Cover crop type',
+    lbl_rok:          'Sowing year',
+    lbl_sow:          'Sowing date',
+    lbl_single_phone: 'Farmer phone',
+    hint_optional:    '(optional)',
+    lbl_term_check:   'Cover crop was terminated before end of assessment',
+    lbl_term_date:    'Termination date',
+    lbl_term_method:  'Termination method',
+    btn_check:        'Check parcel',
+    btn_checking:     'Fetching satellite data…',
+
+    card_map:         'Parcel on orthophoto',
+    map_placeholder:  'Parcel outline will appear after checking',
+    card_chart:       'NDVI timeline',
+    sat_hint_prefix:  '🛰️ Satellite image available from peak NDVI date (',
+    sat_hint_suffix:  ') — select it in the layers menu (icon in top-right corner of map).',
+
+    typ_sc_label: 'Stubble/summer',
+    typ_sc_sub:   'summer · assessed September–mid-October',
+    typ_oz_label: 'Winter',
+    typ_oz_sub:   'assessed autumn + cover until mid-February',
+
+    term_walowanie:    'Rolling',
+    term_talerzowanie: 'Light discing',
+    term_przyoranie:   'Ploughing in',
+    term_oprysk:       'Herbicide spray',
+    term_inne:         'Other method',
+
+    status_OBECNY:           'COVER CROP PRESENT',
+    status_PRAWDOPODOBNY:    'COVER CROP PROBABLE',
+    status_BRAK:             'NO COVER CROP',
+    status_NIEROZSTRZYGNIETE:'INCONCLUSIVE',
+    conf_prefix:             'assessment confidence: ',
+    compliance_badge:        '· check compliance with programme deadlines',
+    low_quality_badge:       '· partial data — requires operator approval',
+    low_quality_banner:      'scenes in the assessment window come from the low-quality zone (valid_frac 0.35–0.50, i.e. 50–65% cloud cover) — result is probable but requires operator approval before inclusion in report.',
+
+    card_upload:    'Upload file (Excel .xlsx/.xls or .csv)',
+    upload_hint:    'Recognised columns (any order, case-insensitive): Parcel ID (e.g. "parcel", "TERYT") and cover crop type ("cover crop", "type"), optionally year, sowing date, termination date and method.',
+    card_parcels:   'Parcels to check',
+    th_id:          'Parcel ID',
+    th_typ:         'Type',
+    th_rok:         'Year',
+    th_sow:         'Sowing date',
+    th_term_date:   'Termination — date',
+    th_term_method: 'Termination — method',
+    btn_add_row:    '+ Add row',
+    btn_run_batch:  'Check all parcels',
+    btn_running:    'Starting…',
+    card_results:   'Results',
+    col_green:      '🟢 OK',
+    col_yellow:     '🟡 Agronomist review needed',
+    col_red:        '🔴 Rejected',
+    col_errors:     '⚠ Data errors (not agronomic assessment)',
+    empty_results:  'No results in this category yet.',
+    link_details:   'View details →',
+    compliance_card:'⚠ check compliance with programme deadlines',
+    low_qual_card:  'partial data — requires operator approval',
+
+    card_add_monitor: 'Add parcel to monitoring',
+    lbl_mon_pid:      'Parcel ID (TERYT)',
+    lbl_mon_typ:      'Cover crop type',
+    lbl_mon_rok:      'Sowing year',
+    lbl_mon_sow:      'Sowing date',
+    hint_opt_short:   '(optional)',
+    lbl_mon_phone:    'Farmer phone (alarm SMS)',
+    lbl_mon_name:     'Name',
+    hint_opt2:        '(optional)',
+    lbl_mon_notes:    'Notes',
+    btn_add_monitor:  'Add to monitoring',
+    btn_adding:       'Adding...',
+    mon_added_ok:     '✅ Parcel added to monitoring',
+    card_calibration: 'NDVI Threshold Calibration',
+    btn_check_cal:    'Check calibration suggestion',
+    cal_loading:      'Loading...',
+    card_mon_list:    'Monitored parcels',
+    btn_refresh:      '⟳ Refresh',
+    mon_list_loading: 'Loading parcel list...',
+    mon_empty:        'No active parcels in monitoring.\nAdd the first parcel above.',
+    status_active:    'Active',
+    status_alarm:     'ALARM',
+    status_completed: 'Completed',
+    mon_last_obs:     'Last measurement:',
+    mon_observations: 'observations',
+    btn_remove:       'Remove from monitoring',
+    btn_check_now:    '▶ Check now (all)',
+    btn_resolve:      'Resolve',
+    cal_no_data:      'No calibration data.',
+    cal_not_enough:   'Not enough data for calibration',
+    cal_photos_of:    'photos with AI analysis',
+    cal_suggestion:   'Suggestion based on',
+    cal_photos:       'photos',
+    cal_veg:          'with cover crop',
+    cal_bare:         'bare soil',
+    col_threshold:    'Threshold',
+    col_current:      'Current',
+    col_suggested:    'Suggested',
+    btn_apply_cal:    'Apply new thresholds',
+    cal_ok:           'Thresholds updated successfully!',
+    err_unknown:      'Error: ',
+    confirm_remove:   'Remove parcel from monitoring?',
+    confirm_cal:      'Change thresholds to COVER_HIGH=',
+    check_now_msg:    'Check started in background. List will refresh in ~30 seconds.',
+    footer_txt:       'Data: Sentinel-2 L2A (Copernicus Data Space Ecosystem), parcel boundaries: ULDK GUGiK, basemap: Geoportal orthophoto. Results are indicative — not a substitute for field inspection.',
+    no_data_sparkline:'no data',
+    checking_cal:     'Checking data...',
+    photos_total:     'Photos:',
+    photos_analyzed:  'analysed by AI',
+    photos_usable:    'Usable for calibration',
+    photos_required:  'required',
+    last_cal:         'Last calibration:',
+    no_cal_data:      'No calibration data.',
+    err_load:         'Load error:',
+    err_cal:          'Error:',
+    chip_baza:        'baseline',
+    chip_szczyt:      'peak',
+    chip_przyrost:    'growth',
+    chip_zima:        'winter',
+    chip_sceny:       'scenes',
+    chip_dni_siewu:   'days sowing to peak',
+    leg_ndvi:         'NDVI — canopy greenness (reliable scenes)',
+    leg_cloudy:       'cloudy scenes (excluded from assessment)',
+    leg_baseline:     'baseline window (stubble)',
+    leg_cover:        'cover assessment window',
+    leg_winter:       'winter window',
+    // short indicator descriptions in the legend below the chart
+    leg_evi_desc:     '— dense biomass, no saturation',
+    leg_savi_desc:    '— corrects bare-soil influence',
+    leg_ndre_desc:    '— chlorophyll, early plant stress',
+    leg_ndwi_desc:    '— moisture: dry vs living cover',
+    leg_rvi_desc:     '— radar, sees through clouds',
+    // indicator explanations shown when hovering a measurement point
+    tip_ndvi:   'The baseline canopy greenness index. On very dense biomass it saturates — it stops rising even as growth continues.',
+    tip_evi:    'An improved greenness index that resists saturation. It separates dense, well-developed cover better than NDVI.',
+    tip_savi:   'NDVI corrected for bare-soil reflectance. More reliable on sparse cover and in early growth stages.',
+    tip_ndre:   'Based on the red-edge band, sensitive to chlorophyll content. It catches plant stress before NDVI shows it.',
+    tip_ndwi:   'Shows water content in plants and soil. Helps tell living cover from dry stubble and crop residue.',
+    tip_rvi:    'Radar index from Sentinel-1 — unaffected by clouds, so it fills gaps in optical data on overcast days. The line is smoothed (median of 3 readings), as the raw radar signal is very noisy. It has its own scale — right axis.',
+    tip_measured: 'measured',
+    tip_cloudy: 'Scene excluded from the assessment — too many clouds or shadows. The value is shown for reference only.',
+    // vertical marker labels on the chart
+    ev_sowing:            'sowing',
+    ev_termination:       'termination',
+    ev_confirmed_tillage: 'confirmed incident',
+    ev_possible_tillage:  'incident',
+    ev_radar_only:        'incident (radar)',
+    btn_back_batch:   '← Back to results',
+    progress_checked: 'checked',
+    progress_done:    'done',
+    manual_cat_label: 'Change category:',
+    manual_cat_green: 'OK',
+    manual_cat_yellow:'Agronomist review',
+    manual_cat_red:   'Rejected',
+    manual_override:  'manual',
+    auto_was:         'auto',
+    cat_green:        'OK',
+    cat_yellow:       'Review',
+    cat_red:          'Rejected',
+    change_category:  'Change category',
+    reviewed:         'Reviewed',
+    btn_export:       'Export',
+    cs_loading:       'Loading multi-spectral data…',
+    cs_label:         'Cover crop confidence',
+    cs_no_data:       'No data for assessment',
+    cs_error:         'Loading error',
+    cs_unavailable:   'Full analysis unavailable — showing NDVI result',
+    cs_alt_note:      'without reliable-scene requirement: {score}% ({date})',
+    analysis_pending_status:'ANALYSIS IN PROGRESS',
+    analysis_pending_conf:  'final verdict and category after full multi-index analysis',
+    analysis_pending_details:'Computing EVI/SAVI/NDRE/NDWI and SAR fusion. Final assessment will appear when this step completes.',
+    analysis_failed_details:'Full analysis failed. Inconclusive status was shown.',
+    expert_toggle_lbl:'▶ Expert panel — detailed indices',
+    biomass_unit:     't DM/ha',
+    co2_unit:         't CO₂eq/ha',
+    biomass_caveat:   'Model-based estimate from satellite indices, not a field measurement — transferred from other crop types, treat as an indicative range.',
+    biomass_at_cap:   'Value at the model ceiling — actual biomass may be higher.',
+    sms_widget_label: 'Send SMS to farmer requesting verification photo',
+    sms_send_btn:     'Send SMS',
+    sms_sent_ok:      'SMS sent',
+    sms_sent_error:   'SMS sending error',
+    sms_phone_prompt: 'Enter farmer phone number for SMS:',
+    sms_phone_missing:'No farmer phone number — add it in the form or Excel file.',
+    sms_pre_message:  'Hello. Our system detected uncertainty in the NDVI assessment for parcel {parcel_id}. Please take a photo of the field and send it via: {url}/photos or reply with a description of the current crop status. Thank you.',
+    export_no_results:'No batch results to export.',
+    manual_cat_label: 'Change category:',
+    manual_cat_green: 'OK',
+    manual_cat_yellow:'Agronomist review',
+    manual_cat_red:   'Rejected',
+    manual_override:  'manually changed',
+    auto_was:         'auto',
+    cat_green:        'OK',
+    cat_yellow:       'Review',
+    cat_red:          'Rejected',
+    change_category:  'Change category',
+  },
+
+  it: {
+    app_title:   'Verifica delle colture di copertura <span>· Sentinel-2 NDVI</span>',
+    app_tagline: 'Particella catastale → timeline della vegetazione satellitare → valutazione se la coltura di copertura è cresciuta',
+    tab_single:  'Singola particella',
+    tab_batch:   'Più particelle',
+    tab_monitor: 'Monitoraggio stagionale',
+    lang_btn:    '🌐 PL',
+
+    card_data:        'Dati di verifica',
+    lbl_pid:          'ID particella',
+    lbl_typ:          'Tipo di coltura',
+    lbl_rok:          'Anno di semina',
+    lbl_sow:          'Data di semina',
+    lbl_single_phone: 'Telefono agricoltore',
+    hint_optional:    '(opzionale)',
+    lbl_term_check:   'La coltura è stata terminata prima della fine della valutazione',
+    lbl_term_date:    'Data di terminazione',
+    lbl_term_method:  'Metodo di terminazione',
+    btn_check:        'Verifica particella',
+    btn_checking:     'Recupero dati satellitari…',
+
+    card_map:         'Particella su ortofoto',
+    map_placeholder:  'Il contorno della particella apparirà dopo la verifica',
+    card_chart:       'Andamento NDVI',
+    sat_hint_prefix:  '🛰️ Immagine satellitare disponibile dalla data di picco NDVI (',
+    sat_hint_suffix:  ') — selezionala nel menu dei layer (icona in alto a destra della mappa).',
+
+    typ_sc_label: 'Stoppie/estiva',
+    typ_sc_sub:   'estiva · valutata settembre–metà ottobre',
+    typ_oz_label: 'Invernale',
+    typ_oz_sub:   'valutata autunno + copertura fino a metà febbraio',
+
+    term_walowanie:    'Rullatura',
+    term_talerzowanie: 'Discatura leggera',
+    term_przyoranie:   'Interramento',
+    term_oprysk:       'Trattamento erbicida',
+    term_inne:         'Altro metodo',
+
+    status_OBECNY:           'COLTURA PRESENTE',
+    status_PRAWDOPODOBNY:    'COLTURA PROBABILE',
+    status_BRAK:             'NESSUNA COLTURA',
+    status_NIEROZSTRZYGNIETE:'INCONCLUDENTE',
+    conf_prefix:             'confidenza valutazione: ',
+    compliance_badge:        '· verificare conformità con le scadenze del programma',
+    low_quality_badge:       '· dati parziali — richiede approvazione operatore',
+    low_quality_banner:      'scene nella finestra di valutazione provengono dalla zona a bassa qualità (valid_frac 0.35–0.50) — il risultato è probabile ma richiede approvazione prima di essere incluso nel report.',
+
+    card_upload:    'Carica file (Excel .xlsx/.xls o .csv)',
+    upload_hint:    'Colonne riconosciute (qualsiasi ordine, maiuscole/minuscole non importanti): ID particella e tipo di coltura, opzionalmente anno, data di semina, data e metodo di terminazione.',
+    card_parcels:   'Particelle da verificare',
+    th_id:          'ID particella',
+    th_typ:         'Tipo',
+    th_rok:         'Anno',
+    th_sow:         'Data semina',
+    th_term_date:   'Terminazione — data',
+    th_term_method: 'Terminazione — metodo',
+    btn_add_row:    '+ Aggiungi riga',
+    btn_run_batch:  'Verifica tutte le particelle',
+    btn_running:    'Avvio…',
+    card_results:   'Risultati',
+    col_green:      '🟢 OK',
+    col_yellow:     '🟡 Revisione agronomo richiesta',
+    col_red:        '🔴 Respinta',
+    col_errors:     '⚠ Errori dati (non valutazione agronomica)',
+    empty_results:  'Nessun risultato in questa categoria.',
+    link_details:   'Visualizza dettagli →',
+    compliance_card:'⚠ verificare conformità con le scadenze',
+    low_qual_card:  'dati parziali — richiede approvazione operatore',
+
+    card_add_monitor: 'Aggiungi particella al monitoraggio',
+    lbl_mon_pid:      'ID particella (catastale)',
+    lbl_mon_typ:      'Tipo di coltura',
+    lbl_mon_rok:      'Anno di semina',
+    lbl_mon_sow:      'Data di semina',
+    hint_opt_short:   '(opz.)',
+    lbl_mon_phone:    'Tel. agricoltore (SMS allarme)',
+    lbl_mon_name:     'Nome',
+    hint_opt2:        '(opz.)',
+    lbl_mon_notes:    'Note',
+    btn_add_monitor:  'Aggiungi al monitoraggio',
+    btn_adding:       'Aggiunta...',
+    mon_added_ok:     '✅ Particella aggiunta al monitoraggio',
+    card_calibration: 'Calibrazione soglie NDVI',
+    btn_check_cal:    'Verifica suggerimento calibrazione',
+    cal_loading:      'Caricamento...',
+    card_mon_list:    'Particelle monitorate',
+    btn_refresh:      '⟳ Aggiorna',
+    mon_list_loading: 'Caricamento lista particelle...',
+    mon_empty:        'Nessuna particella attiva nel monitoraggio.\nAggiungi la prima particella sopra.',
+    status_active:    'Attivo',
+    status_alarm:     'ALLARME',
+    status_completed: 'Completato',
+    mon_last_obs:     'Ultima misurazione:',
+    mon_observations: 'osservazioni',
+    btn_remove:       'Rimuovi dal monitoraggio',
+    btn_check_now:    '▶ Controlla ora (tutti)',
+    btn_resolve:      'Risolvi',
+    cal_no_data:      'Nessun dato di calibrazione.',
+    cal_not_enough:   'Dati insufficienti per la calibrazione',
+    cal_photos_of:    'foto con analisi AI',
+    cal_suggestion:   'Suggerimento basato su',
+    cal_photos:       'foto',
+    cal_veg:          'con coltura',
+    cal_bare:         'suolo nudo',
+    col_threshold:    'Soglia',
+    col_current:      'Attuale',
+    col_suggested:    'Suggerita',
+    btn_apply_cal:    'Applica nuove soglie',
+    cal_ok:           'Soglie aggiornate con successo!',
+    err_unknown:      'Errore: ',
+    confirm_remove:   'Rimuovere la particella dal monitoraggio?',
+    confirm_cal:      'Modificare le soglie in COVER_HIGH=',
+    check_now_msg:    'Controllo avviato in background. La lista si aggiornerà in ~30 secondi.',
+    footer_txt:       'Dati: Sentinel-2 L2A (Copernicus Data Space Ecosystem), confini parcelle: ULDK GUGiK, mappa base: ortofoto Geoportal. I risultati sono indicativi — non sostituiscono l\'ispezione in campo.',
+    no_data_sparkline:'nessun dato',
+    checking_cal:     'Verifica dati...',
+    photos_total:     'Foto:',
+    photos_analyzed:  'analizzate da AI',
+    photos_usable:    'Utilizzabili per calibrazione',
+    photos_required:  'richieste',
+    last_cal:         'Ultima calibrazione:',
+    no_cal_data:      'Nessun dato di calibrazione.',
+    err_load:         'Errore caricamento:',
+    err_cal:          'Errore:',
+    chip_baza:        'base',
+    chip_szczyt:      'picco',
+    chip_przyrost:    'crescita',
+    chip_zima:        'inverno',
+    chip_sceny:       'scene',
+    chip_dni_siewu:   'giorni dalla semina al picco',
+    leg_ndvi:         'NDVI — verdezza della copertura (scene affidabili)',
+    leg_cloudy:       'scene nuvolose (escluse dalla valutazione)',
+    leg_baseline:     'finestra di riferimento (stoppie)',
+    leg_cover:        'finestra di valutazione copertura',
+    leg_winter:       'finestra invernale',
+    // brevi descrizioni degli indici nella legenda sotto il grafico
+    leg_evi_desc:     '— biomassa densa, senza saturazione',
+    leg_savi_desc:    '— corregge l\'effetto del suolo nudo',
+    leg_ndre_desc:    '— clorofilla, stress precoce',
+    leg_ndwi_desc:    '— umidità: copertura secca o viva',
+    leg_rvi_desc:     '— radar, vede attraverso le nuvole',
+    // spiegazioni degli indici mostrate passando sul punto di misura
+    tip_ndvi:   'Indice base della verdezza della copertura. Su biomassa molto densa satura: smette di crescere anche se la crescita continua.',
+    tip_evi:    'Indice di verdezza migliorato, resistente alla saturazione. Distingue meglio di NDVI la copertura densa e ben sviluppata.',
+    tip_savi:   'NDVI corretto per la riflessione del suolo nudo. Più affidabile con copertura rada e nelle prime fasi di crescita.',
+    tip_ndre:   'Basato sulla banda red-edge, sensibile alla clorofilla. Rileva lo stress delle piante prima che sia visibile in NDVI.',
+    tip_ndwi:   'Mostra il contenuto d\'acqua di piante e suolo. Aiuta a distinguere la copertura viva da stoppie secche e residui.',
+    tip_rvi:    'Indice radar da Sentinel-1 — non risente delle nuvole, quindi integra i dati ottici nei giorni coperti. La linea è livellata (mediana di 3 misure), perché il segnale radar grezzo è molto rumoroso. Ha una scala propria — asse destro.',
+    tip_measured: 'misurato',
+    tip_cloudy: 'Scena esclusa dalla valutazione — troppe nuvole o ombre. Il valore è mostrato solo a titolo indicativo.',
+    // etichette dei marcatori verticali sul grafico
+    ev_sowing:            'semina',
+    ev_termination:       'terminazione',
+    ev_confirmed_tillage: 'incidente confermato',
+    ev_possible_tillage:  'incidente',
+    ev_radar_only:        'incidente (radar)',
+    btn_back_batch:   '← Torna ai risultati',
+    progress_checked: 'verificate',
+    progress_done:    'completato',
+    manual_cat_label: 'Cambia categoria:',
+    manual_cat_green: 'OK',
+    manual_cat_yellow:'Revisione agronomo',
+    manual_cat_red:   'Respinta',
+    manual_override:  'manuale',
+    auto_was:         'auto',
+    cat_green:        'OK',
+    cat_yellow:       'Revisione',
+    cat_red:          'Respinta',
+    change_category:  'Cambia categoria',
+    reviewed:         'Esaminato',
+    btn_export:       'Esporta',
+    cs_loading:       'Caricamento dati multi-spettrali…',
+    cs_label:         'Confidenza coltura di copertura',
+    cs_no_data:       'Nessun dato per la valutazione',
+    cs_error:         'Errore di caricamento',
+    cs_unavailable:   'Analisi completa non disponibile — mostro il risultato NDVI',
+    cs_alt_note:      'senza requisito di scena affidabile: {score}% ({date})',
+    analysis_pending_status:'ANALISI IN CORSO',
+    analysis_pending_conf:  'verdetto finale e categoria dopo l\'analisi multi-indice completa',
+    analysis_pending_details:'Calcolo di EVI/SAVI/NDRE/NDWI e fusione con SAR in corso. La valutazione finale apparirà al termine.',
+    analysis_failed_details:'Analisi completa non riuscita. Mostrato stato inconcludente.',
+    expert_toggle_lbl:'▶ Pannello esperto — indici dettagliati',
+    biomass_unit:     't s.s./ha',
+    co2_unit:         't CO₂eq/ha',
+    biomass_caveat:   'Stima modellistica da indici satellitari, non una misura di campo — modello trasferito da altre colture, considerarla un intervallo indicativo.',
+    biomass_at_cap:   'Valore al limite del modello — la biomassa reale potrebbe essere superiore.',
+    sms_widget_label: 'Invia SMS all\'agricoltore richiedendo una foto di verifica',
+    sms_send_btn:     'Invia SMS',
+    sms_sent_ok:      'SMS inviato',
+    sms_sent_error:   'Errore invio SMS',
+    sms_phone_prompt: 'Inserisci il numero di telefono dell\'agricoltore per l\'SMS:',
+    sms_phone_missing:'Numero agricoltore mancante — aggiungilo nel modulo o nel file Excel.',
+    sms_pre_message:  'Buongiorno. Il nostro sistema ha rilevato incertezza nella valutazione NDVI per la particella {parcel_id}. Si prega di scattare una foto del campo e inviarla tramite: {url}/photos o rispondere con una descrizione dello stato attuale della coltura. Grazie.',
+    export_no_results:'Nessun risultato batch da esportare.',
+    manual_cat_label: 'Cambia categoria:',
+    manual_cat_green: 'OK',
+    manual_cat_yellow:'Revisione agronomo',
+    manual_cat_red:   'Respinta',
+    manual_override:  'modificato manualmente',
+    auto_was:         'auto',
+    cat_green:        'OK',
+    cat_yellow:       'Revisione',
+    cat_red:          'Respinta',
+    change_category:  'Cambia categoria',
+  }
+};
+
+let currentLang = localStorage.getItem('lang') || 'pl';
+
+function t(key){ return TRANSLATIONS[currentLang][key] || TRANSLATIONS['pl'][key] || key; }
+
+function applyLang(){
+  // nagłówek
+  document.querySelector('[data-i18n="app_title"]').innerHTML = t('app_title');
+  document.querySelector('[data-i18n="app_tagline"]').textContent = t('app_tagline');
+  document.getElementById('langBtn').textContent =
+    {pl:'🌐 EN', en:'🌐 IT', it:'🌐 PL'}[currentLang] || '🌐 EN';
+
+  // zakładki
+  document.getElementById('tabSingle').textContent = t('tab_single');
+  document.getElementById('tabBatch').textContent = t('tab_batch');
+  document.getElementById('tabMonitor').textContent = t('tab_monitor');
+
+  // formularz pojedynczy
+  _setText('card_data_h', 'card_data');
+  _setText('lbl_pid', 'lbl_pid');
+  _setText('lbl_typ', 'lbl_typ');
+  _setText('lbl_rok', 'lbl_rok');
+  _setText('lbl_sow', 'lbl_sow');
+  _setText('lbl_single_phone', 'lbl_single_phone');
+  _setText('lbl_term_check', 'lbl_term_check');
+  _setText('lbl_term_date', 'lbl_term_date');
+  _setText('lbl_term_method', 'lbl_term_method');
+  _setVal ('go', 'btn_check');
+  _setText('map_ph_text', 'map_placeholder');
+  _setText('card_map_h', 'card_map');
+  _setText('card_chart_h', 'card_chart');
+
+  // typy poplonów — pojedynczy
+  _setText('typ_sc_b', 'typ_sc_label');
+  _setText('typ_sc_sm', 'typ_sc_sub');
+  _setText('typ_oz_b', 'typ_oz_label');
+  _setText('typ_oz_sm', 'typ_oz_sub');
+
+  // sposoby likwidacji
+  const termSel = document.getElementById('termMethod');
+  if(termSel){ const vals=['walowanie','talerzowanie','przyoranie','oprysk','inne'];
+    [...termSel.options].forEach((o,i)=>{ o.text=t('term_'+vals[i]); }); }
+
+  // batch
+  _setText('card_upload_h', 'card_upload');
+  _setText('upload_hint_p', 'upload_hint');
+  _setText('card_parcels_h', 'card_parcels');
+  _setVal ('addRow', 'btn_add_row');
+  _setVal ('runBatch', 'btn_run_batch');
+  _setText('card_results_h', 'card_results');
+
+  // nagłówki tabeli wsadowej
+  const ths = document.querySelectorAll('#batchTable thead th');
+  const thKeys = ['th_id','th_typ','th_rok','th_sow','th_term_date','th_term_method'];
+  ths.forEach((th, i)=>{ if(thKeys[i]) th.textContent = t(thKeys[i]); });
+
+  // wyniki wsadowe — nagłówki kolumn
+  _setHTML('col_green_h', '🟢 OK <span id="cntGreen">'+_cnt('cntGreen')+'</span>');
+  _setHTML('col_yellow_h', t('col_yellow')+' <span id="cntYellow">'+_cnt('cntYellow')+'</span>');
+  _setHTML('col_red_h', t('col_red')+' <span id="cntRed">'+_cnt('cntRed')+'</span>');
+
+  // monitoring
+  _setText('card_add_mon_h', 'card_add_monitor');
+  _setText('card_cal_h', 'card_calibration');
+  _setVal ('monAddBtn', 'btn_add_monitor');
+  _setText('card_mon_list_h', 'card_mon_list');
+
+  // formularz "dodaj działkę do monitoringu"
+  _setText('lbl_mon_pid', 'lbl_mon_pid');
+  _setText('lbl_mon_typ', 'lbl_mon_typ');
+  _setText('lbl_mon_rok', 'lbl_mon_rok');
+  _setText('lbl_mon_sow', 'lbl_mon_sow');
+  _setText('lbl_mon_phone', 'lbl_mon_phone');
+  _setText('lbl_mon_name', 'lbl_mon_name');
+  _setText('lbl_mon_notes', 'lbl_mon_notes');
+
+  // kalibracja i lista monitoringu — odśwież, bo renderują tekst w JS (t())
+  if(document.getElementById('calStatus')) loadCalibrationStatus();
+  if(document.getElementById('monList')) loadMonitorList();
+
+  // footer
+  const footer = document.querySelector('footer');
+  if(footer) footer.textContent = t('footer_txt');
+
+  // legenda wykresu
+  document.querySelectorAll('[data-leg]').forEach(el => {
+    el.textContent = t(el.dataset.leg);
+  });
+
+  // Etykiety znaczników na wykresie (siew / likwidacja / wykryta orka) są
+  // rysowane na canvasie, a nie w DOM — pętla [data-leg] powyżej ich nie
+  // dosięgnie. Plugin eventMarkers rozwiązuje je z klucza przy każdym
+  // rysowaniu, więc wystarczy wymusić przerysowanie.
+  if(typeof chart !== 'undefined' && chart) chart.update('none');
+
+  document.documentElement.lang = currentLang;
+}
+
+function _cnt(id){ const el=document.getElementById(id); return el?el.textContent:'0'; }
+function _setText(id, key){ const el=document.getElementById(id); if(el) el.textContent=t(key); }
+function _setVal(id, key){ const el=document.getElementById(id); if(el && el.tagName==='BUTTON') el.textContent=t(key); }
+function _setHTML(id, html){ const el=document.getElementById(id); if(el) el.innerHTML=html; }
+
+function toggleLang(){
+  const cycle = {pl:'en', en:'it', it:'pl'};
+  currentLang = cycle[currentLang] || 'pl';
+  localStorage.setItem('lang', currentLang);
+  applyLang();
+}
+
+// dodaj id do kluczowych elementow HTML (te ktore nie maja id a potrzebujemy)
+function _addIds(){
+  // naglowki kart
+  const cardHs = document.querySelectorAll('.card-h');
+  const cardMap = {
+    'Dane do weryfikacji': 'card_data_h',
+    'Verification data': 'card_data_h',
+    'Działka na ortofotomapie': 'card_map_h',
+    'Parcel on orthophoto': 'card_map_h',
+    'Przebieg NDVI': 'card_chart_h',
+    'NDVI timeline': 'card_chart_h',
+    'Wgraj plik (Excel .xlsx/.xls lub .csv)': 'card_upload_h',
+    'Upload file (Excel .xlsx/.xls or .csv)': 'card_upload_h',
+    'Wyniki': 'card_results_h',
+    'Results': 'card_results_h',
+    'Dodaj działkę do monitoringu': 'card_add_mon_h',
+    'Add parcel to monitoring': 'card_add_mon_h',
+    'Kalibracja progów NDVI': 'card_cal_h',
+    'NDVI Threshold Calibration': 'card_cal_h',
+  };
+  cardHs.forEach(h => {
+    const txt = h.textContent.trim();
+    if(cardMap[txt]) h.id = cardMap[txt];
+  });
+
+  // etykiety formularza
+  document.querySelectorAll('label').forEach(lb => {
+    if(lb.id) return; // nie nadpisuj etykiet, które już mają własne id
+    const txt = lb.textContent.trim();
+    if(txt.startsWith('Identyfikator') || txt.startsWith('Parcel ID') && lb.htmlFor==='pid') lb.id='lbl_pid';
+    if(lb.htmlFor==='rok') lb.id='lbl_rok';
+    if(lb.htmlFor==='sowDateSingle') lb.id='lbl_sow';
+    if(lb.htmlFor==='termDate') lb.id='lbl_term_date';
+    if(lb.htmlFor==='termMethod') lb.id='lbl_term_method';
+  });
+  document.querySelectorAll('label').forEach(lb => {
+    if(lb.id) return; // nie kradnij id etykiecie, która już je ma (np. panel monitoringu ma własne lbl_mon_typ)
+    const txt = lb.textContent.trim();
+    if(txt==='Rodzaj poplonu' || txt==='Cover crop type') lb.id='lbl_typ';
+  });
+  const termChk = document.getElementById('hasTermination');
+  if(termChk && termChk.parentElement) termChk.parentElement.id = 'lbl_term_check_wrap';
+
+  // mapa placeholder
+  const mph = document.getElementById('map-ph');
+  if(mph) mph.id = 'map_ph_text';
+
+  // hint upload
+  document.querySelectorAll('.card-b p.hint').forEach(p => {
+    if(p.textContent.includes('Rozpoznawane') || p.textContent.includes('Recognised'))
+      p.id = 'upload_hint_p';
+  });
+
+  // nagłówki wyników wsadowych
+  document.querySelectorAll('.result-col h3').forEach(h => {
+    if(h.textContent.includes('OK')) h.id='col_green_h';
+    if(h.textContent.includes('interpretacji') || h.textContent.includes('Agronomist')) h.id='col_yellow_h';
+    if(h.textContent.includes('Odrzucone') || h.textContent.includes('Rejected')) h.id='col_red_h';
+  });
+
+  // typy poplonów w formularzach
+  document.querySelectorAll('.radio-grid label').forEach(lb => {
+    const b = lb.querySelector('b');
+    const sm = lb.querySelector('small');
+    if(!b) return;
+    if((b.textContent==='Ścierniskowy'||b.textContent==='Stubble/summer') && lb.htmlFor==='t1'){
+      b.id='typ_sc_b'; if(sm) sm.id='typ_sc_sm';
+    }
+    if((b.textContent==='Ozimy'||b.textContent==='Winter') && lb.htmlFor==='t2'){
+      b.id='typ_oz_b'; if(sm) sm.id='typ_oz_sm';
+    }
+  });
+
+  // nagłówki kart monitoring
+  const monListCard = document.querySelector('#viewMonitor .card:last-child .card-h');
+  if(monListCard) monListCard.id = 'card_mon_list_h';
+}
+
+// SMS textarea — licznik znaków i flaga edycji
+if(document.readyState === 'loading'){
+  document.addEventListener('DOMContentLoaded', () => { _addIds(); applyLang(); _wireSmsTextarea(); });
+} else {
+  _addIds(); applyLang(); _wireSmsTextarea();
+}
+function _wireSmsTextarea(){
+  const ta = document.getElementById('smsText');
+  if(!ta) return;
+  ta.addEventListener('input', () => { ta.dataset.userEdited='1'; _updateSmsCount(); });
+}
+</script>
+</body>
+</html>
+<!-- DEBUG: usuń po weryfikacji -->
