@@ -256,6 +256,101 @@ def init_db():
             except sqlite3.OperationalError:
                 pass  # kolumna już istnieje
 
+        # Panel rolnika i SMS (listopad 2026): rolnik = numer telefonu
+        # (klucz grupowania pól, jak w raporcie zbiorczym), dostęp do panelu
+        # przez losowy token w linku (bez kont i haseł), skrzynka nadawcza
+        # SMS (każda wiadomość — także niewysłana, gdy brak bramki — z
+        # treścią do skopiowania) i odpowiedź rolnika na alert.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS farmers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone TEXT NOT NULL UNIQUE,
+            name TEXT,
+            lang TEXT DEFAULT 'pl',
+            token TEXT UNIQUE,
+            sms_opt_in INTEGER DEFAULT 1,
+            auto_suggestions INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            last_seen_at TEXT
+        );
+        CREATE TABLE IF NOT EXISTS sms_outbox (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            farmer_id INTEGER,
+            phone TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            text TEXT NOT NULL,
+            status TEXT NOT NULL,
+            provider TEXT,
+            provider_response TEXT,
+            water_field_id INTEGER,
+            water_alarm_id INTEGER,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        """)
+        for table, col, typ in (
+            ("water_alarms", "farmer_ack", "TEXT"),
+            ("water_alarms", "farmer_ack_note", "TEXT"),
+            ("water_alarms", "farmer_ack_at", "TEXT"),
+            ("water_alarms", "farmer_notified_at", "TEXT"),
+            ("rain_gauge_readings", "source", "TEXT"),
+        ):
+            try:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass
+
+        # OPTRAM (optram.py): parametry trapezu per pole wodne i seria
+        # wilgotności względnej W (0–1) z Sentinel-2.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS optram_params (
+            water_field_id INTEGER PRIMARY KEY,
+            i_d REAL, s_d REAL, i_w REAL, s_w REAL, r2_d REAL, r2_w REAL,
+            ndvi_lo REAL, ndvi_hi REAL, n_px INTEGER, n_scenes INTEGER,
+            date_from TEXT, date_to TEXT, region_wkt TEXT, quality TEXT,
+            warnings_json TEXT, bins_json TEXT, scatter_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS optram_series (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            water_field_id INTEGER NOT NULL,
+            obs_date TEXT NOT NULL,
+            w REAL, ndvi REAL, valid_frac REAL,
+            UNIQUE(water_field_id, obs_date)
+        );
+        """)
+
+        # Termika Landsat (thermal.py): metryki per scena nad polem wodnym.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS thermal_scenes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            water_field_id INTEGER NOT NULL,
+            scene_date TEXT NOT NULL,
+            t_field REAL, t_p10 REAL, t_p90 REAL, ndvi REAL,
+            t_cold REAL, t_hot REAL, tsi REAL, n_px INTEGER, valid_frac REAL,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(water_field_id, scene_date)
+        );
+        """)
+
+        # Próbki biomasy poplonu z pola (biomass_calibration.py) — do
+        # kalibracji modelu biomasy/N z CIred-edge.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS biomass_samples (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            parcel_id TEXT NOT NULL,
+            sample_date TEXT NOT NULL,
+            dm_t_ha REAL NOT NULL,
+            n_kg_ha REAL,
+            mix TEXT,
+            fresh_g REAL, frame_m2 REAL, n_frames INTEGER, dm_pct REAL, n_pct REAL,
+            geometry_wkt TEXT,
+            notes TEXT,
+            scene_date TEXT, delta_days INTEGER, valid_frac REAL,
+            cire REAL, ndre REAL, ndvi REAL, evi REAL,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        """)
+
         # Migracje dla baz założonych przed dodaniem wielowskaźnikowego
         # snapshotu przy alarmie (potrzebnego do sugestii wag w calibration.py).
         for table, cols in (
@@ -968,3 +1063,258 @@ def get_yield_map(map_id):
 def delete_yield_map(map_id):
     with _lock, _conn() as c:
         return c.execute("DELETE FROM yield_maps WHERE id=?", (map_id,)).rowcount
+
+
+# ---------------------------------------------------------------------------
+# Panel rolnika i SMS (farmer_panel.py). Rolnik identyfikowany numerem
+# telefonu w postaci znormalizowanej (same cyfry z kodem kraju, bez "+").
+# ---------------------------------------------------------------------------
+
+_FARMER_EDITABLE = {"name", "lang", "sms_opt_in", "auto_suggestions"}
+FARMER_LANGS = {"pl", "en", "ru", "uz"}
+
+
+def get_farmers():
+    with _lock, _conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM farmers ORDER BY name, phone").fetchall()]
+
+
+def get_farmer_by_phone(phone):
+    with _lock, _conn() as c:
+        row = c.execute("SELECT * FROM farmers WHERE phone=?", (phone,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_farmer_by_id(farmer_id):
+    with _lock, _conn() as c:
+        row = c.execute("SELECT * FROM farmers WHERE id=?", (farmer_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def get_farmer_by_token(token):
+    if not token:
+        return None
+    with _lock, _conn() as c:
+        row = c.execute("SELECT * FROM farmers WHERE token=?", (token,)).fetchone()
+        return dict(row) if row else None
+
+
+def add_farmer(phone, name=None, lang="pl", token=None):
+    if lang not in FARMER_LANGS:
+        raise ValueError(f"Nieznany język: {lang!r}")
+    with _lock, _conn() as c:
+        cur = c.execute("INSERT INTO farmers (phone,name,lang,token) VALUES (?,?,?,?)",
+                        (phone, name, lang, token))
+        return cur.lastrowid
+
+
+def update_farmer(farmer_id, **kwargs):
+    unknown = set(kwargs) - _FARMER_EDITABLE - {"token"}
+    if unknown:
+        raise ValueError(f"Nieznane pola rolnika: {sorted(unknown)}")
+    if "lang" in kwargs and kwargs["lang"] not in FARMER_LANGS:
+        raise ValueError(f"Nieznany język: {kwargs['lang']!r}")
+    if not kwargs:
+        return
+    cols = ",".join(f"{k}=?" for k in kwargs)
+    with _lock, _conn() as c:
+        c.execute(f"UPDATE farmers SET {cols} WHERE id=?", (*kwargs.values(), farmer_id))
+
+
+def touch_farmer_seen(farmer_id):
+    with _lock, _conn() as c:
+        c.execute("UPDATE farmers SET last_seen_at=datetime('now') WHERE id=?", (farmer_id,))
+
+
+def add_sms(phone, kind, text, status, farmer_id=None, provider=None, provider_response=None,
+            water_field_id=None, water_alarm_id=None):
+    with _lock, _conn() as c:
+        cur = c.execute(
+            "INSERT INTO sms_outbox (farmer_id,phone,kind,text,status,provider,provider_response,"
+            "water_field_id,water_alarm_id) VALUES (?,?,?,?,?,?,?,?,?)",
+            (farmer_id, phone, kind, text, status, provider, provider_response,
+             water_field_id, water_alarm_id))
+        return cur.lastrowid
+
+
+def get_sms_outbox(limit=50, farmer_id=None):
+    q = "SELECT * FROM sms_outbox"
+    params = []
+    if farmer_id is not None:
+        q += " WHERE farmer_id=?"
+        params.append(farmer_id)
+    q += " ORDER BY id DESC LIMIT ?"
+    params.append(int(limit))
+    with _lock, _conn() as c:
+        return [dict(r) for r in c.execute(q, params).fetchall()]
+
+
+def count_sms_sent_since(phone, since_sql_modifier="-1 day", kind=None, water_field_id=None):
+    """Liczba SMS-ów faktycznie wysłanych (status 'sent') na numer od
+    datetime('now', since_sql_modifier) — do limitu kosztów i do
+    nieponawiania tej samej sugestii nawadniania."""
+    q = ("SELECT COUNT(*) FROM sms_outbox WHERE phone=? AND status='sent' "
+         "AND created_at >= datetime('now', ?)")
+    params = [phone, since_sql_modifier]
+    if kind:
+        q += " AND kind=?"
+        params.append(kind)
+    if water_field_id is not None:
+        q += " AND water_field_id=?"
+        params.append(water_field_id)
+    with _lock, _conn() as c:
+        return c.execute(q, params).fetchone()[0]
+
+
+def last_sms(kind, water_field_id):
+    with _lock, _conn() as c:
+        row = c.execute("SELECT * FROM sms_outbox WHERE kind=? AND water_field_id=? AND status='sent' "
+                        "ORDER BY id DESC LIMIT 1", (kind, water_field_id)).fetchone()
+        return dict(row) if row else None
+
+
+_FARMER_ACKS = {"seen", "will_irrigate", "irrigated", "disagree"}
+
+
+def set_water_alarm_farmer_ack(alarm_id, ack, note=None):
+    if ack not in _FARMER_ACKS:
+        raise ValueError(f"Nieznana odpowiedź rolnika: {ack!r}")
+    with _lock, _conn() as c:
+        c.execute("UPDATE water_alarms SET farmer_ack=?, farmer_ack_note=?, "
+                  "farmer_ack_at=datetime('now') WHERE id=?", (ack, note, alarm_id))
+
+
+def mark_water_alarm_farmer_notified(alarm_id):
+    with _lock, _conn() as c:
+        c.execute("UPDATE water_alarms SET notified_farmer=1, farmer_notified_at=datetime('now') "
+                  "WHERE id=?", (alarm_id,))
+
+
+def set_rain_reading_source(reading_id, source):
+    with _lock, _conn() as c:
+        c.execute("UPDATE rain_gauge_readings SET source=? WHERE id=?", (source, reading_id))
+
+
+# ---------------------------------------------------------------------------
+# OPTRAM (optram.py)
+# ---------------------------------------------------------------------------
+
+_OPTRAM_COLS = ("i_d", "s_d", "i_w", "s_w", "r2_d", "r2_w", "ndvi_lo", "ndvi_hi", "n_px", "n_scenes",
+                "date_from", "date_to", "region_wkt", "quality", "warnings_json", "bins_json",
+                "scatter_json")
+
+
+def save_optram_params(water_field_id, row: dict):
+    vals = [row.get(k) for k in _OPTRAM_COLS]
+    cols = ",".join(_OPTRAM_COLS)
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM optram_params WHERE water_field_id=?", (water_field_id,))
+        c.execute(f"INSERT INTO optram_params (water_field_id,{cols}) VALUES (?{',?' * len(vals)})",
+                  (water_field_id, *vals))
+
+
+def get_optram_params(water_field_id):
+    with _lock, _conn() as c:
+        row = c.execute("SELECT * FROM optram_params WHERE water_field_id=?", (water_field_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def delete_optram(water_field_id):
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM optram_params WHERE water_field_id=?", (water_field_id,))
+        c.execute("DELETE FROM optram_series WHERE water_field_id=?", (water_field_id,))
+
+
+def clear_optram_series(water_field_id):
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM optram_series WHERE water_field_id=?", (water_field_id,))
+
+
+def upsert_optram_series(water_field_id, rows):
+    with _lock, _conn() as c:
+        for r in rows:
+            c.execute("INSERT INTO optram_series (water_field_id,obs_date,w,ndvi,valid_frac) VALUES (?,?,?,?,?) "
+                      "ON CONFLICT(water_field_id,obs_date) DO UPDATE SET w=excluded.w, ndvi=excluded.ndvi, "
+                      "valid_frac=excluded.valid_frac",
+                      (water_field_id, r["obs_date"], r["w"], r["ndvi"], r.get("valid_frac")))
+
+
+def get_optram_series(water_field_id):
+    with _lock, _conn() as c:
+        rows = c.execute("SELECT obs_date,w,ndvi,valid_frac FROM optram_series WHERE water_field_id=? "
+                         "ORDER BY obs_date ASC", (water_field_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Termika Landsat (thermal.py)
+# ---------------------------------------------------------------------------
+
+_THERMAL_COLS = ("t_field", "t_p10", "t_p90", "ndvi", "t_cold", "t_hot", "tsi", "n_px", "valid_frac")
+
+
+def upsert_thermal(water_field_id, rows):
+    cols = ",".join(_THERMAL_COLS)
+    upd = ",".join(f"{k}=excluded.{k}" for k in _THERMAL_COLS)
+    with _lock, _conn() as c:
+        for r in rows:
+            c.execute(f"INSERT INTO thermal_scenes (water_field_id,scene_date,{cols}) "
+                      f"VALUES (?,?{',?' * len(_THERMAL_COLS)}) "
+                      f"ON CONFLICT(water_field_id,scene_date) DO UPDATE SET {upd}",
+                      (water_field_id, r["scene_date"], *[r.get(k) for k in _THERMAL_COLS]))
+
+
+def get_thermal_series(water_field_id):
+    with _lock, _conn() as c:
+        rows = c.execute(f"SELECT scene_date,{','.join(_THERMAL_COLS)} FROM thermal_scenes "
+                         "WHERE water_field_id=? ORDER BY scene_date ASC", (water_field_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_thermal(water_field_id):
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM thermal_scenes WHERE water_field_id=?", (water_field_id,))
+
+
+# ---------------------------------------------------------------------------
+# Próbki biomasy poplonu (biomass_calibration.py)
+# ---------------------------------------------------------------------------
+
+_BIOMASS_SAMPLE_COLS = ("parcel_id", "sample_date", "dm_t_ha", "n_kg_ha", "mix", "fresh_g", "frame_m2",
+                        "n_frames", "dm_pct", "n_pct", "geometry_wkt", "notes")
+_BIOMASS_MATCH_COLS = ("scene_date", "delta_days", "valid_frac", "cire", "ndre", "ndvi", "evi")
+
+
+def add_biomass_sample(**kw):
+    unknown = set(kw) - set(_BIOMASS_SAMPLE_COLS)
+    if unknown:
+        raise ValueError(f"Nieznane pola próbki: {sorted(unknown)}")
+    cols = [k for k in _BIOMASS_SAMPLE_COLS if k in kw]
+    with _lock, _conn() as c:
+        cur = c.execute(f"INSERT INTO biomass_samples ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})",
+                        [kw[k] for k in cols])
+        return cur.lastrowid
+
+
+def update_biomass_sample_match(sample_id, match: dict):
+    vals = [match.get(k) for k in _BIOMASS_MATCH_COLS]
+    with _lock, _conn() as c:
+        c.execute(f"UPDATE biomass_samples SET {','.join(k + '=?' for k in _BIOMASS_MATCH_COLS)} WHERE id=?",
+                  (*vals, sample_id))
+
+
+def get_biomass_samples():
+    with _lock, _conn() as c:
+        return [dict(r) for r in c.execute(
+            "SELECT * FROM biomass_samples ORDER BY sample_date DESC, id DESC").fetchall()]
+
+
+def get_biomass_sample(sample_id):
+    with _lock, _conn() as c:
+        row = c.execute("SELECT * FROM biomass_samples WHERE id=?", (sample_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def delete_biomass_sample(sample_id):
+    with _lock, _conn() as c:
+        c.execute("DELETE FROM biomass_samples WHERE id=?", (sample_id,))

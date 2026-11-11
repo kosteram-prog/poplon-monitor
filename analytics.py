@@ -74,8 +74,8 @@ EVALSCRIPT_MULTI = """
 // Sentinel Hub liczy wyjście 32-bitowe x2 PU — zmierzone: 2,53 -> 1,26 PU na
 // to samo zapytanie, różnica NDVI <= 0,00005. Wskaźniki są zwracane x10000
 // (zakres INT16 +-32767 mieści EVI do 2,5), REIP jako (reip - 680) x 400
-// (680-750 nm -> 0-28000). Dekodowanie w analytics.fetch_multi_series
-// (MULTI_INDEX_SCALE / REIP_OFFSET_NM / REIP_SCALE). Piksele odrzucone
+// (680-750 nm -> 0-28000), CIred-edge x1000. Dekodowanie w analytics.fetch_multi_series
+// (MULTI_INDEX_SCALE / REIP_OFFSET_NM / REIP_SCALE / CIRE_SCALE). Piksele odrzucone
 // dostają 0 i dataMask 0 — statystyki liczone są tylko z dataMask = 1.
 
 function setup() {
@@ -91,6 +91,7 @@ function setup() {
       { id: "ndwi",     bands: 1, sampleType: "INT16" },
       { id: "reip",     bands: 1, sampleType: "INT16" },
       { id: "ndti",     bands: 1, sampleType: "INT16" },
+      { id: "cire",     bands: 1, sampleType: "INT16" },
       { id: "dataMask", bands: 1, sampleType: "UINT8"   }
     ]
   };
@@ -105,7 +106,7 @@ function evaluatePixel(s) {
   if (!valid) {
     return {
       ndvi: [0], evi: [0], savi: [0],
-      ndre: [0], ndwi: [0], reip: [0], ndti: [0], dataMask: [0]
+      ndre: [0], ndwi: [0], reip: [0], ndti: [0], cire: [0], dataMask: [0]
     };
   }
 
@@ -151,8 +152,13 @@ function evaluatePixel(s) {
   // niski = gleba goła/świeżo zaorana, wysoki = resztki pożniwne/biomasa
   const ndti = (SWIR1 - SWIR2) / (SWIR1 + SWIR2 + 1e-9);
 
+  // CIred-edge — Chlorophyll Index red edge (Gitelson 2003; Clevers & Gitelson
+  // 2013 dla S2: B07/B05 - 1). Liniowy względem chlorofilu i N w łanie, nie
+  // nasyca się przy bujnym poplonie jak NDVI/NDRE. INT16 x1000 (zakres -1..30).
+  const cire = RE3 / (RE1 + 1e-9) - 1.0;
+
   return {
-    // INT16: wskaźniki x10000, REIP jako (reip - 680) x 400 (patrz SKALOWANIE)
+    // INT16: wskaźniki x10000, REIP jako (reip - 680) x 400, CIre x1000 (patrz SKALOWANIE)
     ndvi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndvi)))],
     evi:      [Math.round(10000 * Math.max(-1, Math.min(2.5, evi)))],
     savi:     [Math.round(10000 * Math.max(-1, Math.min(1.5, savi)))],
@@ -160,6 +166,7 @@ function evaluatePixel(s) {
     ndwi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndwi)))],
     reip:     [Math.round(400 * (Math.max(680, Math.min(750, reip)) - 680))],
     ndti:     [Math.round(10000 * Math.max(-1, Math.min(1, ndti)))],
+    cire:     [Math.round(1000 * Math.max(-1, Math.min(30, cire)))],
     dataMask: [1]
   };
 }
@@ -182,6 +189,7 @@ function setup() {
       { id: "ndwi",     bands: 1, sampleType: "INT16" },
       { id: "reip",     bands: 1, sampleType: "INT16" },
       { id: "ndti",     bands: 1, sampleType: "INT16" },
+      { id: "cire",     bands: 1, sampleType: "INT16" },
       { id: "dataMask", bands: 1, sampleType: "UINT8"   }
     ]
   };
@@ -192,7 +200,7 @@ function evaluatePixel(s) {
   if (!valid) {
     return {
       ndvi: [0], evi: [0], savi: [0],
-      ndre: [0], ndwi: [0], reip: [0], ndti: [0], dataMask: [0]
+      ndre: [0], ndwi: [0], reip: [0], ndti: [0], cire: [0], dataMask: [0]
     };
   }
 
@@ -214,9 +222,10 @@ function evaluatePixel(s) {
   const ndwi = (NIR_N - SWIR1) / (NIR_N + SWIR1 + 1e-9);   // NDMI z B8A
   const reip = 700.0 + 40.0 * (((RED + RE3) / 2.0) - RE1) / (RE2 - RE1 + 1e-9);
   const ndti = (SWIR1 - SWIR2) / (SWIR1 + SWIR2 + 1e-9);
+  const cire = RE3 / (RE1 + 1e-9) - 1.0;   // CIred-edge (patrz EVALSCRIPT_MULTI)
 
   return {
-    // INT16: wskaźniki x10000, REIP jako (reip - 680) x 400 (patrz SKALOWANIE)
+    // INT16: wskaźniki x10000, REIP jako (reip - 680) x 400, CIre x1000 (patrz SKALOWANIE)
     ndvi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndvi)))],
     evi:      [Math.round(10000 * Math.max(-1, Math.min(2.5, evi)))],
     savi:     [Math.round(10000 * Math.max(-1, Math.min(1.5, savi)))],
@@ -224,6 +233,7 @@ function evaluatePixel(s) {
     ndwi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndwi)))],
     reip:     [Math.round(400 * (Math.max(680, Math.min(750, reip)) - 680))],
     ndti:     [Math.round(10000 * Math.max(-1, Math.min(1, ndti)))],
+    cire:     [Math.round(1000 * Math.max(-1, Math.min(30, cire)))],
     dataMask: [1]
   };
 }
@@ -258,7 +268,10 @@ CDSE_TOKEN_URL = ("https://identity.dataspace.copernicus.eu/auth/realms/"
 # gołej gleby" z core.assess().
 THRESHOLDS = {
     "ndvi": {"bare": 0.15, "low": 0.30, "high": 0.42},
-    "evi":  {"bare": 0.10, "low": 0.25, "high": 0.50},
+    # EVI2 (od listopada 2026): progi dawnego EVI przeliczone przez
+    # EVI2 = 0.878·EVI + 0.003 (R² 0.978, 164 czyste sceny z 3 działek LENs,
+    # kwiecień–listopad 2026, porownaj_evi_evi2.py; dawniej 0.10/0.25/0.50).
+    "evi":  {"bare": 0.09, "low": 0.22, "high": 0.44},
     "savi": {"bare": 0.08, "low": 0.20, "high": 0.40},
     "ndre": {"bare": 0.08, "low": 0.20, "high": 0.45},
     "ndwi": {"bare": 0.00, "low": 0.15, "high": 0.40},
@@ -515,7 +528,7 @@ def reload_weights():
 # dziedziczyć pułap odpowiedni dla kukurydzy.
 BIOMASS_COEFFICIENTS = {
     "intercept": -1.2,
-    "evi":       12.5,
+    "evi":       14.2,   # dawniej 12.5 dla EVI; ×1/0.878 po przejściu na EVI2 (patrz THRESHOLDS)
     "ndre":       8.3,
     "rvi":        6.1,
 }
@@ -701,6 +714,7 @@ def _ndwi_distribution(outputs: dict) -> dict:
 MULTI_INDEX_SCALE = 10000.0
 REIP_OFFSET_NM = 680.0
 REIP_SCALE = 400.0
+CIRE_SCALE = 1000.0
 
 
 def fetch_multi_series_strict(
@@ -783,6 +797,8 @@ def _fetch_multi_raw(geom_4326, t_start, t_end, token, evalscript, max_cloud) ->
                 return None
             if key == "reip":
                 return round(v / REIP_SCALE + REIP_OFFSET_NM, 4)
+            if key == "cire":
+                return round(v / CIRE_SCALE, 4)
             return round(v / MULTI_INDEX_SCALE, 4)
 
         ndvi = _mean("ndvi")
@@ -801,6 +817,7 @@ def _fetch_multi_raw(geom_4326, t_start, t_end, token, evalscript, max_cloud) ->
             "ndwi": _mean("ndwi"),
             "reip": _mean("reip"),
             "ndti": _mean("ndti"),
+            "cire": _mean("cire"),
             "valid_frac": valid_frac,
         })
     return sorted(out, key=lambda x: x["date"])
@@ -1063,15 +1080,92 @@ def compute_confidence_score(
 # ESTYMACJA BIOMASY
 # ============================================================
 
+# ------------------------------------------------------------
+# Model biomasy / pobrania N z CIred-edge KALIBROWANY NA PRÓBKACH Z POLA
+# (biomass_calibration.py). Dopóki doradca nie zbierze próbek (ramki,
+# ścięcie, suszenie/ważenie) i nie zatwierdzi dopasowania, oba są None i
+# estimate_biomass działa jak dotąd (model literaturowy EVI+NDRE+RVI).
+# Kształt: {"form": "linear"|"log", "a", "b", "smear", "n", "rmse_cv",
+#           "r2", "x_min", "x_max", "created_at"}
+# ------------------------------------------------------------
+BIOMASS_CIRE_MODEL: Optional[dict] = None
+N_CIRE_MODEL: Optional[dict] = None
+CIRE_EXTRAPOLATION_MARGIN = 0.10     # ułamek zakresu próbek dozwolony poza nim
+
+
+def reload_biomass_models(db_module=None):
+    """Wczytuje zatwierdzone modele CIre z tabeli settings (start aplikacji
+    i po zatwierdzeniu w biomass_calibration)."""
+    global BIOMASS_CIRE_MODEL, N_CIRE_MODEL
+    import json as _json
+    try:
+        if db_module is None:
+            import db as db_module
+        raw_b = db_module.get_setting("biomass_cire_model")
+        raw_n = db_module.get_setting("n_cire_model")
+    except Exception:
+        return
+    BIOMASS_CIRE_MODEL = _json.loads(raw_b) if raw_b else None
+    N_CIRE_MODEL = _json.loads(raw_n) if raw_n else None
+
+
+def predict_cire_model(model: dict, cire: float) -> float:
+    if model["form"] == "log":
+        y = math.exp(model["a"] + model["b"] * cire) * model.get("smear", 1.0)
+    else:
+        y = model["a"] + model["b"] * cire
+    return max(0.0, y)
+
+
+def cire_extrapolated(model: dict, cire: float) -> bool:
+    span = max(1e-9, model["x_max"] - model["x_min"])
+    m = CIRE_EXTRAPOLATION_MARGIN * span
+    return cire < model["x_min"] - m or cire > model["x_max"] + m
+
+
+def _co2_from_dm(t_ha):
+    # ~45% suchej masy = węgiel, CO2eq = C x 44/12 (patrz estimate_biomass)
+    return round(t_ha * 0.45 * 3.67, 2)
+
+
+def _estimate_from_cire(cire: float) -> dict:
+    m = BIOMASS_CIRE_MODEL
+    bm = min(BIOMASS_MAX_T_HA, predict_cire_model(m, cire))
+    err = float(m["rmse_cv"])
+    lo, hi = max(0.0, round(bm - err, 2)), min(BIOMASS_MAX_T_HA, round(bm + err, 2))
+    extra = cire_extrapolated(m, cire)
+    out = {
+        "biomass_t_ha": round(bm, 2), "biomass_low_t_ha": lo, "biomass_high_t_ha": hi,
+        "carbon_co2eq_t_ha": _co2_from_dm(bm), "carbon_co2eq_low_t_ha": _co2_from_dm(lo),
+        "carbon_co2eq_high_t_ha": _co2_from_dm(hi),
+        "model": (f"CIred-edge ({'log-liniowy' if m['form'] == 'log' else 'liniowy'}), "
+                  f"kalibracja na {m['n']} próbkach z pola, błąd walidacji krzyżowej "
+                  f"±{err:.2f} t/ha"),
+        "model_source": "field_calibrated",
+        "confidence": "low" if extra or m["n"] < 15 else "medium",
+        "at_model_cap": bm >= BIOMASS_MAX_T_HA - 1e-9,
+        "cire": round(cire, 3), "cire_extrapolated": extra,
+    }
+    if N_CIRE_MODEL:
+        nm = N_CIRE_MODEL
+        n = predict_cire_model(nm, cire)
+        out.update({"n_uptake_kg_ha": round(n, 0),
+                    "n_uptake_low_kg_ha": round(max(0.0, n - nm["rmse_cv"]), 0),
+                    "n_uptake_high_kg_ha": round(n + nm["rmse_cv"], 0),
+                    "n_model_n": nm["n"], "n_extrapolated": cire_extrapolated(nm, cire)})
+    return out
+
+
 def estimate_biomass(
     evi:  Optional[float],
     ndre: Optional[float],
     rvi:  Optional[float] = None,
+    cire: Optional[float] = None,
 ) -> Optional[dict]:
     """
     Estymacja biomasy nadziemnej (sucha masa, t/ha) — SZACUNEK modelowy, nie
     pomiar. Model regresji wielowskaźnikowej (Kross et al. 2015, kukurydza):
-        Biomass = -1.2 + 12.5·EVI + 8.3·NDRE + 6.1·RVI
+        Biomass = -1.2 + 14.2·EVI2 + 8.3·NDRE + 6.1·RVI   (12.5·EVI przeliczone na EVI2)
 
     Współczynniki pochodzą z literatury dla innego typu uprawy (patrz
     komentarz przy BIOMASS_COEFFICIENTS) — bez danych referencyjnych z pola
@@ -1091,6 +1185,8 @@ def estimate_biomass(
 
     Zwraca None jeśli brak minimalnych danych (EVI i NDRE).
     """
+    if cire is not None and BIOMASS_CIRE_MODEL:
+        return _estimate_from_cire(cire)
     if evi is None or ndre is None:
         return None
 
@@ -1126,8 +1222,10 @@ def estimate_biomass(
         "carbon_co2eq_low_t_ha":  _co2(bm_low),
         "carbon_co2eq_high_t_ha": _co2(bm_high),
         "model":           model_desc,
+        "model_source":    "literature",
         "confidence":      "medium" if has_rvi else "low",
         "at_model_cap":    at_cap,
+        "cire":            None if cire is None else round(cire, 3),
     }
 
 
@@ -1585,6 +1683,7 @@ CREATE TABLE IF NOT EXISTS multi_observations (
                                  -- nie wchodzi jeszcze do confidence_score (krok 3 planu)
     ndti             REAL,      -- Normalized Difference Tillage Index (B11/B12);
                                  -- informacyjny, nie wchodzi jeszcze do detect_agro_events_fused
+    cire             REAL,      -- CIred-edge (B07/B05 - 1); biomasa/N poplonu po kalibracji
     valid_frac       REAL NOT NULL DEFAULT 0,
     -- Wskaźniki radarowe (S1) — null jeśli niedostępne tego dnia
     vv_db            REAL,
@@ -1638,7 +1737,7 @@ def init_analytics_tables(db_path: str = "monitoring.db"):
         conn.executescript(ANALYTICS_DB_SCHEMA)
         # Migracja dla baz założonych przed dodaniem REIP/NDTI —
         # CREATE TABLE IF NOT EXISTS nie dotknie już istniejącej tabeli.
-        for col in ("reip", "ndti"):
+        for col in ("reip", "ndti", "cire"):
             try:
                 conn.execute(f"ALTER TABLE multi_observations ADD COLUMN {col} REAL")
             except sqlite3.OperationalError:
@@ -1663,7 +1762,7 @@ def init_analytics_tables(db_path: str = "monitoring.db"):
             CREATE VIEW chart_data AS
             SELECT
                 m.parcel_db_id, m.obs_date,
-                m.ndvi, m.evi, m.savi, m.ndre, m.ndwi, m.reip, m.ndti, m.valid_frac,
+                m.ndvi, m.evi, m.savi, m.ndre, m.ndwi, m.reip, m.ndti, m.cire, m.valid_frac,
                 m.confidence_score, m.primary_index, m.primary_value,
                 m.biomass_t_ha, m.carbon_co2eq,
                 s.vv_db, s.vh_db, s.rvi AS s1_rvi, s.cross_ratio_db
@@ -1704,7 +1803,7 @@ def save_multi_observation(parcel_db_id: int, rec: dict,
     )
 
     # Estymacja biomasy
-    bm = estimate_biomass(rec.get("evi"), rec.get("ndre"), rvi)
+    bm = estimate_biomass(rec.get("evi"), rec.get("ndre"), rvi, cire=rec.get("cire"))
 
     # Wybór wskaźnika głównego — zgodny z fazą użytą do Confidence Score
     primary = select_primary_index(rec, season_phase, 1.0 - rec.get("valid_frac", 1.0), rvi)
@@ -1712,14 +1811,14 @@ def save_multi_observation(parcel_db_id: int, rec: dict,
     with sqlite3.connect(db_path) as conn:
         conn.execute("""
             INSERT OR REPLACE INTO multi_observations
-            (parcel_db_id, obs_date, ndvi, evi, savi, ndre, ndwi, reip, ndti, valid_frac,
+            (parcel_db_id, obs_date, ndvi, evi, savi, ndre, ndwi, reip, ndti, cire, valid_frac,
              rvi, confidence_score, primary_index, primary_value,
              biomass_t_ha, carbon_co2eq)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             parcel_db_id, obs_date,
             rec.get("ndvi"), rec.get("evi"), rec.get("savi"),
-            rec.get("ndre"), rec.get("ndwi"), rec.get("reip"), rec.get("ndti"),
+            rec.get("ndre"), rec.get("ndwi"), rec.get("reip"), rec.get("ndti"), rec.get("cire"),
             rec.get("valid_frac", 0),
             rvi,
             cs["score"] if cs else None,
@@ -1727,6 +1826,30 @@ def save_multi_observation(parcel_db_id: int, rec: dict,
             bm["biomass_t_ha"] if bm else None,
             bm["carbon_co2eq_t_ha"] if bm else None,
         ))
+
+
+def recompute_stored_biomass(db_path: Optional[str] = None) -> int:
+    """Po zmianie modelu biomasy przelicza biomass_t_ha / carbon_co2eq we
+    wszystkich zapisanych obserwacjach (wykresy, raporty). Zwraca liczbę
+    zmienionych wierszy."""
+    import sqlite3
+    if db_path is None:
+        import db as _db
+        db_path = _db.DB_PATH
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT id, evi, ndre, rvi, cire FROM multi_observations").fetchall()
+            n = 0
+            for r in rows:
+                bm = estimate_biomass(r["evi"], r["ndre"], r["rvi"], cire=r["cire"])
+                conn.execute("UPDATE multi_observations SET biomass_t_ha=?, carbon_co2eq=? WHERE id=?",
+                             (bm["biomass_t_ha"] if bm else None, bm["carbon_co2eq_t_ha"] if bm else None,
+                              r["id"]))
+                n += 1
+            return n
+    except sqlite3.OperationalError:
+        return 0
 
 
 def get_multi_indicators_near(parcel_db_id: int, obs_date, max_delta_days: int = 5,

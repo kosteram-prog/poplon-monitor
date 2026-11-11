@@ -31,6 +31,8 @@ from photo_handler import router as photo_router
 from calibration import router as calibration_router
 from irrigation_log import router as irrigation_router
 from yield_api import router as yield_router
+from farmer_panel import router as farmer_router
+from biomass_calibration import router as biomass_router
 
 Path("uploads/photos").mkdir(parents=True, exist_ok=True)
 
@@ -53,6 +55,9 @@ async def lifespan(app: FastAPI):
     # --- kalibrowalne wagi Confidence Score z bazy (jeśli operator je zmienił) ---
     from analytics import reload_weights
     reload_weights()
+    # --- model biomasy/N z CIred-edge skalibrowany na próbkach z pola (jeśli jest) ---
+    from analytics import reload_biomass_models
+    reload_biomass_models()
 
     # --- tabele analityczne (multi_observations, agro_events, chart_data VIEW) ---
     try:
@@ -98,6 +103,8 @@ app.include_router(photo_router)
 app.include_router(calibration_router)
 app.include_router(irrigation_router)
 app.include_router(yield_router)
+app.include_router(farmer_router)
+app.include_router(biomass_router)
 
 log = logging.getLogger("app")
 
@@ -827,7 +834,8 @@ def check_multi(req: MultiCheckRequest):
                     }
 
             biomass = estimate_biomass(
-                peak_record.get("evi"), peak_record.get("ndre"), rvi_at_peak
+                peak_record.get("evi"), peak_record.get("ndre"), rvi_at_peak,
+                cire=peak_record.get("cire"),
             )
             if rvi_at_peak is not None:
                 peak_record = {**peak_record, "rvi": rvi_at_peak}

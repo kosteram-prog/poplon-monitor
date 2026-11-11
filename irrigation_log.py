@@ -659,6 +659,92 @@ def water_field_balance(water_field_id: int):
         raise HTTPException(status_code=502, detail=f"Blad bilansu wodnego: {e}")
 
 
+class OptramCalibrateRequest(BaseModel):
+    months: int = Field(12, ge=3, le=24, description="Długość okresu kalibracji (miesiące wstecz od dziś).")
+    buffer_m: float = Field(1500.0, ge=300, le=3000, description="Zapas regionu kalibracji wokół pola (m).")
+
+
+@router.post("/field/{water_field_id}/optram/calibrate")
+def water_optram_calibrate(water_field_id: int, req: OptramCalibrateRequest,
+                           _auth=Depends(require_operator_key)):
+    """Kalibracja trapezu OPTRAM dla regionu wokół pola + seria wilgotności
+    W za ten sam okres (optram.py). Kosztowne: jedno zapytanie Process API
+    (do 60 scen) i jedno Statistical API."""
+    import optram
+    field = _get_field_or_404(water_field_id)
+    end = date.today()
+    start = end - timedelta(days=int(req.months * 30.4))
+    try:
+        return optram.calibrate_field(field, start, end, buffer_m=req.buffer_m)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        log.exception("Blad kalibracji OPTRAM dla pola id=%s", water_field_id)
+        raise HTTPException(status_code=502, detail=f"Blad kalibracji OPTRAM: {e}")
+
+
+@router.get("/field/{water_field_id}/optram")
+def water_optram_get(water_field_id: int):
+    import optram
+    _get_field_or_404(water_field_id)
+    return optram.get_field_optram(water_field_id)
+
+
+@router.post("/field/{water_field_id}/optram/refresh")
+def water_optram_refresh(water_field_id: int, _auth=Depends(require_operator_key)):
+    import optram
+    field = _get_field_or_404(water_field_id)
+    if not db.get_optram_params(water_field_id):
+        raise HTTPException(status_code=409, detail="Pole nie ma jeszcze kalibracji OPTRAM.")
+    try:
+        n = optram.update_recent(field, days=45)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Blad OPTRAM: {e}")
+    return {"added": n, **optram.get_field_optram(water_field_id)}
+
+
+@router.delete("/field/{water_field_id}/optram")
+def water_optram_delete(water_field_id: int, _auth=Depends(require_operator_key)):
+    _get_field_or_404(water_field_id)
+    db.delete_optram(water_field_id)
+    return {"deleted": True}
+
+
+class ThermalFetchRequest(BaseModel):
+    months: int = Field(6, ge=1, le=24, description="Ile miesięcy wstecz pobrać (Landsat na CDSE od 2021).")
+
+
+@router.post("/field/{water_field_id}/thermal/fetch")
+def water_thermal_fetch(water_field_id: int, req: ThermalFetchRequest,
+                        _auth=Depends(require_operator_key)):
+    """Termika Landsat 8/9 dla pola (thermal.py): jedno zapytanie Process API
+    (do 60 scen) dla kwadratu ~3 km wokół pola."""
+    import thermal
+    field = _get_field_or_404(water_field_id)
+    end = date.today()
+    try:
+        rows = thermal.fetch_field(field, end - timedelta(days=int(req.months * 30.4)), end)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        log.exception("Blad termiki dla pola id=%s", water_field_id)
+        raise HTTPException(status_code=502, detail=f"Blad termiki Landsat: {e}")
+    return {"added": len(rows), **thermal.get_field_thermal(field)}
+
+
+@router.get("/field/{water_field_id}/thermal")
+def water_thermal_get(water_field_id: int):
+    import thermal
+    return thermal.get_field_thermal(_get_field_or_404(water_field_id))
+
+
+@router.delete("/field/{water_field_id}/thermal")
+def water_thermal_delete(water_field_id: int, _auth=Depends(require_operator_key)):
+    _get_field_or_404(water_field_id)
+    db.delete_thermal(water_field_id)
+    return {"deleted": True}
+
+
 @router.post("/field/{water_field_id}/check_now")
 def water_field_check_now(water_field_id: int, _auth=Depends(require_operator_key)):
     """Sprawdzenie 'na żądanie' silnikiem anomalii (water_stress.py) —
@@ -684,11 +770,19 @@ class TriageRequest(BaseModel):
     triage_status: str = Field(..., pattern="^(confirmed|rejected|needs_visit)$")
     triage_note: Optional[str] = Field(None, max_length=2000)
     triage_by: Optional[str] = Field(None, max_length=80)
+    notify_farmer: bool = Field(
+        False, description="Przy potwierdzeniu: wyślij rolnikowi SMS z linkiem do "
+        "jego panelu (farmer_panel.notify_confirmed_alarm).")
 
 
 @router.get("/triage_queue")
 def water_triage_queue(status: str = "pending"):
-    return db.get_water_alarms(triage_status=status if status != "all" else None)
+    alarms = db.get_water_alarms(triage_status=status if status != "all" else None)
+    # Czy da się wysłać SMS rolnikowi przy potwierdzeniu (checkbox w UI).
+    phones = {f["id"]: bool((f.get("farmer_phone") or "").strip()) for f in db.get_water_fields()}
+    for a in alarms:
+        a["has_farmer_phone"] = phones.get(a["water_field_id"], False)
+    return alarms
 
 
 @router.get("/alarm/{alarm_id}")
@@ -706,7 +800,15 @@ def water_alarm_triage(alarm_id: int, req: TriageRequest, _auth=Depends(require_
         raise HTTPException(status_code=404, detail="Nie znaleziono alarmu.")
     db.set_water_alarm_triage(alarm_id, req.triage_status,
                               triage_note=req.triage_note, triage_by=req.triage_by)
-    return {"id": alarm_id, "triage_status": req.triage_status}
+    out = {"id": alarm_id, "triage_status": req.triage_status}
+    if req.triage_status == "confirmed" and req.notify_farmer:
+        import farmer_panel
+        try:
+            out["sms"] = farmer_panel.notify_confirmed_alarm(alarm_id)
+        except Exception as e:  # SMS nie może zablokować decyzji doradcy
+            log.error(f"SMS po potwierdzeniu alertu {alarm_id}: {e}")
+            out["sms"] = {"status": "failed", "error": str(e)}
+    return out
 
 
 # ---------------------------------------------------------------------------

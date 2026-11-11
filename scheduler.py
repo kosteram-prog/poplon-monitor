@@ -308,11 +308,15 @@ def check_all_water_fields():
     for f in fields:
         try:
             water_stress.fetch_and_store_observation(f)
+            water_stress.refresh_optram(f)
+            water_stress.refresh_thermal(f)
             verdict = water_stress.build_verdict_for_field(f)
             # Bilans wodny FAO-56 (nieblokujący): dokleja kontekst do
             # werdyktu satelitarnego, a gdy satelita milczy, a model
             # przewiduje stres w ciągu BALANCE_ALERT_DAYS dni — osobny alarm.
             water_stress.attach_water_balance(f, verdict)
+            water_stress.attach_optram(f, verdict)
+            water_stress.attach_thermal(f, verdict)
             alarm_id = water_stress.record_alarm_if_risky(f, verdict)
             if alarm_id:
                 log.warning(f"  ALARM wodny ({verdict['risk_type']}) pole id={f['id']} "
@@ -327,6 +331,16 @@ def check_all_water_fields():
     log.info("KONIEC: sprawdzanie pol wodnych")
 
 
+def farmer_suggestions_job():
+    import farmer_panel
+    try:
+        res = farmer_panel.auto_suggestions_job()
+        if res:
+            log.info(f"Sugestie nawodnienia SMS: {len(res)} ({', '.join(r['status'] for r in res)})")
+    except Exception as e:
+        log.error(f"Sugestie nawodnienia SMS: {e}")
+
+
 def start_scheduler():
     global _scheduler
     _scheduler = BackgroundScheduler()
@@ -334,8 +348,12 @@ def start_scheduler():
                        id="monitor_job", replace_existing=True)
     _scheduler.add_job(check_all_water_fields, "interval", hours=48,
                        id="water_monitor_job", replace_existing=True)
+    # Automatyczne SMS-y z sugestią nawodnienia (tylko rolnicy z włączoną
+    # opcją w panelu operatora) — raz dziennie rano, czasu lokalnego serwera.
+    _scheduler.add_job(farmer_suggestions_job, "cron", hour=6, minute=40,
+                       id="farmer_suggestions_job", replace_existing=True)
     _scheduler.start()
-    log.info("Scheduler uruchomiony (co 48h, poplony + moduł wodny)")
+    log.info("Scheduler uruchomiony (co 48h, poplony + moduł wodny; sugestie SMS codziennie 6:40)")
 
 
 def stop_scheduler():

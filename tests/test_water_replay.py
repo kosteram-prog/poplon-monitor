@@ -92,6 +92,7 @@ def test_replay_z_bilansem_generuje_alarm_bilansu_gdy_satelita_milczy(irr_field,
     types = {a["risk_type"] for a in res["alarms"]}
     assert ws.BALANCE_RISK_TYPE in types
     assert res["summary"]["stress_days_in_balance"] > 0
+    assert res["stress_periods"] and res["stress_periods"][0]["from"] <= res["stress_periods"][0]["to"]
     assert any(r["balance_status"] == "stress" for r in res["rows"])
 
 

@@ -129,6 +129,22 @@ def _balance_summary_at(day: date, by_date: dict, horizon: int = 10) -> Optional
             "suggested_dose_m3_ha": None if dose is None else round(dose * 10, -1)}
 
 
+def _date_periods(days: list) -> list:
+    """Sąsiednie daty skleja w przedziały {from, to} (włącznie)."""
+    if not days:
+        return []
+    days = sorted(days)
+    out, start, prev = [], days[0], days[0]
+    for d in days[1:]:
+        if (d - prev).days == 1:
+            prev = d
+            continue
+        out.append({"from": start.isoformat(), "to": prev.isoformat()})
+        start = prev = d
+    out.append({"from": start.isoformat(), "to": prev.isoformat()})
+    return out
+
+
 def replay_field(field: dict, weather_series: Optional[list] = None) -> dict:
     """Suchy przebieg silnika na zapisanej historii pola. Zwraca
     {"rows": [...], "alarms": [...], "summary": {...}}; niczego nie zapisuje."""
@@ -197,7 +213,10 @@ def replay_field(field: dict, weather_series: Optional[list] = None) -> dict:
         "phenology_suppressed": sum(1 for r in rows if r["phenology_explained"]),
         "stress_days_in_balance": sum(1 for r in bal_by_date.values() if r.get("stress")),
     }
-    return {"rows": rows, "alarms": alarms, "summary": summary}
+    stress_periods = _date_periods(
+        [d for d, r in bal_by_date.items() if r.get("stress") and not r.get("is_forecast")])
+    return {"rows": rows, "alarms": alarms, "summary": summary,
+            "stress_periods": stress_periods}
 
 
 # ---------------------------------------------------------------------------

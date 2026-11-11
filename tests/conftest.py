@@ -139,3 +139,14 @@ def no_weather_cache(monkeypatch):
     Testy samej pamięci podręcznej włączają ją jawnie."""
     import weather
     monkeypatch.setattr(weather, "WEATHER_CACHE_ENABLED", False)
+
+
+@pytest.fixture(autouse=True)
+def reset_biomass_models():
+    """analytics.BIOMASS_CIRE_MODEL / N_CIRE_MODEL to globalny stan procesu
+    (zatwierdzenie modelu w biomass_calibration podmienia go w pamięci)."""
+    import analytics
+    b, n = analytics.BIOMASS_CIRE_MODEL, analytics.N_CIRE_MODEL
+    analytics.BIOMASS_CIRE_MODEL = analytics.N_CIRE_MODEL = None
+    yield
+    analytics.BIOMASS_CIRE_MODEL, analytics.N_CIRE_MODEL = b, n

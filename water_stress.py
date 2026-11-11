@@ -791,10 +791,44 @@ def check_field_now(field: dict) -> dict:
     triage — to robi scheduler (record_alarm_if_risky), żeby samo
     sprawdzenie podglądowe operatora nie zapychało kolejki."""
     fresh = fetch_and_store_observation(field)
+    refresh_optram(field)
+    refresh_thermal(field)
     verdict = build_verdict_for_field(field)
     verdict["fresh_observation_fetched"] = fresh is not None
     attach_water_balance(field, verdict)
+    attach_optram(field, verdict)
+    attach_thermal(field, verdict)
     return verdict
+
+
+def refresh_thermal(field: dict) -> int:
+    """Dociąga świeże sceny Landsat, jeśli pole ma już termikę (nieblokujące)."""
+    try:
+        import thermal
+        return thermal.update_recent(field)
+    except Exception as e:
+        log.warning("Termika: odświeżenie pola id=%s nieudane: %s", field.get("id"), e)
+        return 0
+
+
+def attach_thermal(field: dict, verdict: dict) -> dict:
+    import thermal
+    return thermal.attach_thermal(field, verdict)
+
+
+def refresh_optram(field: dict) -> int:
+    """Dopisuje świeże W z OPTRAM, jeśli pole ma kalibrację (nieblokujące)."""
+    try:
+        import optram
+        return optram.update_recent(field)
+    except Exception as e:
+        log.warning("OPTRAM: odświeżenie pola id=%s nieudane: %s", field.get("id"), e)
+        return 0
+
+
+def attach_optram(field: dict, verdict: dict) -> dict:
+    import optram
+    return optram.attach_optram(field, verdict)
 
 
 def attach_water_balance(field: dict, verdict: dict) -> dict:

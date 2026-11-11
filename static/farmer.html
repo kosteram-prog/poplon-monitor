@@ -1,0 +1,431 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<meta name="referrer" content="no-referrer">
+<title>PopMonitor · Twoje pola</title>
+<style>
+:root{
+  --bg:#F4F1EA; --card:#FFFFFF; --ink:#1F2A1F; --muted:#5F6B5C; --line:#E2DDD0;
+  --green:#2F7A46; --green-bg:#E5F1E8; --amber:#B86E12; --amber-bg:#FBEFD9;
+  --red:#A3321F; --red-bg:#F8E1DC; --blue:#2D6A9F; --blue-bg:#E2EEF8; --accent:#1E5631;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#141914; --card:#1D241D; --ink:#E8EDE6; --muted:#A5B0A2; --line:#2F3A2F;
+    --green:#6CC48A; --green-bg:#1F3526; --amber:#E7A54B; --amber-bg:#3A2D17;
+    --red:#EE8573; --red-bg:#3D211C; --blue:#7FB4E3; --blue-bg:#1B2C3B; --accent:#8ED1A2; }
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif}
+header{padding:18px 16px 8px;max-width:640px;margin:0 auto;display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+h1{font-size:22px;margin:0}
+.sub{color:var(--muted);font-size:14px;margin-top:2px}
+.langs{display:flex;gap:4px;flex-shrink:0}
+.langs button{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:8px;padding:6px 8px;font-size:13px;cursor:pointer}
+.langs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+main{max-width:640px;margin:0 auto;padding:0 16px 32px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;margin:14px 0;overflow:hidden}
+.card-h{padding:14px 16px 4px}
+.card-h b{font-size:18px;word-break:break-word}
+.meta{color:var(--muted);font-size:13px}
+.status{margin:10px 16px;border-radius:12px;padding:14px}
+.status .big{font-size:20px;font-weight:700}
+.status .dose{font-size:17px;margin-top:4px}
+.st-ok{background:var(--green-bg);color:var(--green)}
+.st-warn{background:var(--amber-bg);color:var(--amber)}
+.st-bad{background:var(--red-bg);color:var(--red)}
+.st-none{background:var(--bg);color:var(--muted)}
+.status .txt{color:var(--ink);font-size:14px;margin-top:6px}
+.gauge{margin:6px 16px 4px}
+.gauge .lbl{display:flex;justify-content:space-between;font-size:13px;color:var(--muted)}
+.bar{position:relative;height:14px;border-radius:7px;background:var(--line);overflow:hidden;margin-top:4px}
+.bar i{position:absolute;left:0;top:0;bottom:0;border-radius:7px}
+.bar s{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--ink);opacity:.55}
+.fc{margin:8px 16px;font-size:14px;color:var(--muted)}
+.note{margin:4px 16px 10px;font-size:13px;color:var(--muted);font-style:italic}
+.alert{margin:10px 16px;border-left:4px solid var(--red);background:var(--red-bg);border-radius:8px;padding:10px 12px}
+.alert .t{font-weight:600}
+.alert .adv{margin-top:6px;font-size:14px}
+.alert .acks{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.alert .done{margin-top:8px;font-size:14px;color:var(--green);font-weight:600}
+button.b{border:1px solid var(--line);background:var(--card);color:var(--ink);border-radius:10px;padding:10px 12px;font-size:15px;cursor:pointer}
+button.p{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px 16px 14px}
+form.f{padding:4px 16px 14px;display:none}
+form.f.open{display:block}
+form.f label{display:block;font-size:13px;color:var(--muted);margin:8px 0 3px}
+form.f input,form.f select{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:var(--card);color:var(--ink)}
+.row{display:flex;gap:8px}
+.row > *{flex:1}
+.msg{padding:0 16px 10px;font-size:14px}
+.msg.ok{color:var(--green)} .msg.err{color:var(--red)}
+details.hist{padding:0 16px 14px;font-size:14px}
+details.hist summary{cursor:pointer;color:var(--muted)}
+details.hist ul{margin:6px 0 0;padding-left:18px}
+.empty{text-align:center;color:var(--muted);padding:40px 16px}
+footer{max-width:640px;margin:0 auto;padding:0 16px 32px;color:var(--muted);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1 id="h1">Twoje pola</h1>
+    <div class="sub" id="sub"></div>
+  </div>
+  <div class="langs" id="langs"></div>
+</header>
+<main id="main"><p class="empty" id="loading">…</p></main>
+<footer id="foot"></footer>
+
+<script>
+const L = {
+  pl: {
+    title:'Twoje pola', hello:'Dzień dobry', updated:'Stan na', loading:'Ładowanie…',
+    bad_link:'Link jest nieaktualny. Poproś doradcę o nowy.', net_err:'Brak połączenia. Spróbuj za chwilę.',
+    no_fields:'Nie masz jeszcze pól w systemie. Skontaktuj się z doradcą.',
+    m_irrigation:'pole nawadniane', m_rainfed:'pole bez nawadniania',
+    st_stress_irr:'Nawodnij teraz', st_soon_irr:'Nawodnij do {d}', st_ok:'Woda w glebie wystarcza',
+    st_stress_rf:'Rośliny cierpią z braku wody', st_soon_rf:'Wkrótce zabraknie wody ({d})', st_approach:'Zapas wody się kończy',
+    st_none:'Brak danych do oceny', st_err:'Nie udało się policzyć bilansu (brak danych pogodowych).',
+    dose:'Dawka: ok. {mm} mm ({m3} m³/ha)',
+    ok_horizon:'Według prognozy na {n} dni nawadnianie nie będzie potrzebne.',
+    ok_horizon_rf:'Według prognozy na {n} dni zapas wody wystarczy.',
+    gauge:'Zapas wody w glebie', gauge_hint:'kreska = próg, poniżej którego rośliny zaczynają cierpieć',
+    fc:'Najbliższe {n} dni: deszcz {p} mm, parowanie {e} mm', fc_t:', do {t} °C', fc_hot:' — sucho i gorąco',
+    low_conf:'Mała pewność: od dawna nie było dużego deszczu ani nawodnienia, więc stan gleby jest szacowany.',
+    sat:'Ostatnie zdjęcie satelitarne: {d}',
+    a_balance:'Doradca: w glebie brakuje wody', a_stress:'Doradca: rośliny wykazują stres wodny (zdjęcia satelitarne)',
+    a_performance:'Doradca: rośliny przesychają mimo nawadniania — sprawdź instalację',
+    a_uniformity:'Doradca: część pola jest wyraźnie suchsza — sprawdź równomierność nawadniania',
+    a_generic:'Doradca potwierdził problem z wodą na polu', a_dose:'Zalecane: ok. {mm} mm ({m3} m³/ha) do {d}.',
+    a_note:'Uwaga doradcy:',
+    ack_seen:'Przeczytałem', ack_will_irrigate:'Nawodnię', ack_irrigated:'Już nawodniłem', ack_disagree:'Nie zgadzam się',
+    ack_done:'Twoja odpowiedź: {a}', ack_note_prompt:'Krótko: dlaczego? (opcjonalnie)',
+    btn_irr:'💧 Zapisz nawodnienie', btn_rain:'🌧 Zapisz deszcz',
+    f_date:'Data', f_method:'Sposób', f_amount:'Ile wody', f_unit_mm:'mm', f_unit_m3:'m³/ha', f_rain:'Deszczomierz (mm)',
+    f_save:'Zapisz', f_cancel:'Anuluj', saved:'Zapisane. Dziękujemy!', err:'Błąd: ',
+    meth_zalewowe:'bruzdowe / zalewowe', meth_kroplowe:'kroplowe', meth_deszczowanie:'deszczowanie',
+    hist:'Ostatnie wpisy', h_irr:'Nawodnienie {d}: {a}', h_rain:'Deszcz {d}: {mm} mm', h_noamt:'bez dawki',
+    foot:'To szacunek z modelu bilansu wodnego, prognozy pogody i zdjęć satelitarnych — nie zastępuje oceny w polu. W razie wątpliwości zadzwoń do doradcy.',
+  },
+  en: {
+    title:'Your fields', hello:'Hello', updated:'As of', loading:'Loading…',
+    bad_link:'This link has expired. Ask your advisor for a new one.', net_err:'No connection. Try again shortly.',
+    no_fields:'You have no fields in the system yet. Contact your advisor.',
+    m_irrigation:'irrigated field', m_rainfed:'rainfed field',
+    st_stress_irr:'Irrigate now', st_soon_irr:'Irrigate by {d}', st_ok:'Enough water in the soil',
+    st_stress_rf:'Crop is short of water', st_soon_rf:'Water will run short soon ({d})', st_approach:'Soil water is running low',
+    st_none:'Not enough data yet', st_err:'Could not compute the water balance (weather data unavailable).',
+    dose:'Amount: approx. {mm} mm ({m3} m³/ha)',
+    ok_horizon:'No irrigation needed in the {n}-day forecast.', ok_horizon_rf:'Soil water should last through the {n}-day forecast.',
+    gauge:'Water left in the soil', gauge_hint:'line = threshold below which the crop starts to suffer',
+    fc:'Next {n} days: rain {p} mm, evaporation {e} mm', fc_t:', up to {t} °C', fc_hot:' — dry and hot',
+    low_conf:'Low certainty: no big rain or irrigation for a long time, so the soil state is estimated.',
+    sat:'Latest satellite image: {d}',
+    a_balance:'Advisor: the soil is short of water', a_stress:'Advisor: crop shows water stress (satellite images)',
+    a_performance:'Advisor: crop is drying despite irrigation — check the system',
+    a_uniformity:'Advisor: part of the field is clearly drier — check irrigation uniformity',
+    a_generic:'Your advisor confirmed a water problem on this field', a_dose:'Recommended: approx. {mm} mm ({m3} m³/ha) by {d}.',
+    a_note:'Advisor note:',
+    ack_seen:'Got it', ack_will_irrigate:'I will irrigate', ack_irrigated:'Already irrigated', ack_disagree:'I disagree',
+    ack_done:'Your answer: {a}', ack_note_prompt:'Briefly: why? (optional)',
+    btn_irr:'💧 Log irrigation', btn_rain:'🌧 Log rain',
+    f_date:'Date', f_method:'Method', f_amount:'Amount of water', f_unit_mm:'mm', f_unit_m3:'m³/ha', f_rain:'Rain gauge (mm)',
+    f_save:'Save', f_cancel:'Cancel', saved:'Saved. Thank you!', err:'Error: ',
+    meth_zalewowe:'furrow / flood', meth_kroplowe:'drip', meth_deszczowanie:'sprinkler',
+    hist:'Recent entries', h_irr:'Irrigation {d}: {a}', h_rain:'Rain {d}: {mm} mm', h_noamt:'no amount',
+    foot:'This is an estimate from a soil water balance model, weather forecast and satellite images — it does not replace checking the field. If in doubt, call your advisor.',
+  },
+  ru: {
+    title:'Ваши поля', hello:'Здравствуйте', updated:'Данные на', loading:'Загрузка…',
+    bad_link:'Ссылка устарела. Попросите агронома прислать новую.', net_err:'Нет связи. Попробуйте позже.',
+    no_fields:'В системе пока нет ваших полей. Свяжитесь с агрономом.',
+    m_irrigation:'поливное поле', m_rainfed:'богарное поле',
+    st_stress_irr:'Полейте сейчас', st_soon_irr:'Полейте до {d}', st_ok:'Воды в почве достаточно',
+    st_stress_rf:'Растениям не хватает воды', st_soon_rf:'Скоро не хватит воды ({d})', st_approach:'Запас воды заканчивается',
+    st_none:'Пока мало данных', st_err:'Не удалось рассчитать водный баланс (нет данных о погоде).',
+    dose:'Норма: ок. {mm} мм ({m3} м³/га)',
+    ok_horizon:'По прогнозу на {n} дней полив не нужен.', ok_horizon_rf:'По прогнозу на {n} дней воды хватит.',
+    gauge:'Запас воды в почве', gauge_hint:'черта = порог, ниже которого растения страдают',
+    fc:'Ближайшие {n} дней: дождь {p} мм, испарение {e} мм', fc_t:', до {t} °C', fc_hot:' — сухо и жарко',
+    low_conf:'Низкая точность: давно не было сильного дождя или полива, состояние почвы оценено приблизительно.',
+    sat:'Последний снимок со спутника: {d}',
+    a_balance:'Агроном: в почве не хватает воды', a_stress:'Агроном: у растений водный стресс (снимки со спутника)',
+    a_performance:'Агроном: растения сохнут несмотря на полив — проверьте систему',
+    a_uniformity:'Агроном: часть поля заметно суше — проверьте равномерность полива',
+    a_generic:'Агроном подтвердил проблему с водой на поле', a_dose:'Рекомендуется: ок. {mm} мм ({m3} м³/га) до {d}.',
+    a_note:'Комментарий агронома:',
+    ack_seen:'Прочитал', ack_will_irrigate:'Полью', ack_irrigated:'Уже полил', ack_disagree:'Не согласен',
+    ack_done:'Ваш ответ: {a}', ack_note_prompt:'Коротко: почему? (необязательно)',
+    btn_irr:'💧 Записать полив', btn_rain:'🌧 Записать дождь',
+    f_date:'Дата', f_method:'Способ', f_amount:'Сколько воды', f_unit_mm:'мм', f_unit_m3:'м³/га', f_rain:'Дождемер (мм)',
+    f_save:'Сохранить', f_cancel:'Отмена', saved:'Сохранено. Спасибо!', err:'Ошибка: ',
+    meth_zalewowe:'по бороздам / напуском', meth_kroplowe:'капельный', meth_deszczowanie:'дождевание',
+    hist:'Последние записи', h_irr:'Полив {d}: {a}', h_rain:'Дождь {d}: {mm} мм', h_noamt:'без нормы',
+    foot:'Это оценка по модели водного баланса, прогнозу погоды и снимкам со спутника — она не заменяет осмотр поля. Если сомневаетесь, позвоните агроному.',
+  },
+  uz: {
+    title:'Dalalaringiz', hello:'Assalomu alaykum', updated:'Holat', loading:'Yuklanmoqda…',
+    bad_link:'Havola eskirgan. Agronomdan yangisini so‘rang.', net_err:'Aloqa yo‘q. Birozdan keyin urinib ko‘ring.',
+    no_fields:'Tizimda hali dalalaringiz yo‘q. Agronom bilan bog‘laning.',
+    m_irrigation:'sug‘oriladigan dala', m_rainfed:'lalmi dala',
+    st_stress_irr:'Hozir sug‘oring', st_soon_irr:'{d} gacha sug‘oring', st_ok:'Tuproqda suv yetarli',
+    st_stress_rf:'O‘simliklarga suv yetishmayapti', st_soon_rf:'Tez orada suv yetishmaydi ({d})', st_approach:'Suv zaxirasi tugayapti',
+    st_none:'Hozircha ma’lumot yetarli emas', st_err:'Suv balansini hisoblab bo‘lmadi (ob-havo ma’lumoti yo‘q).',
+    dose:'Me’yor: taxminan {mm} mm ({m3} m³/ga)',
+    ok_horizon:'{n} kunlik prognozga ko‘ra sug‘orish kerak emas.', ok_horizon_rf:'{n} kunlik prognozga ko‘ra suv yetadi.',
+    gauge:'Tuproqdagi suv zaxirasi', gauge_hint:'chiziq = o‘simliklar qiynala boshlaydigan chegara',
+    fc:'Keyingi {n} kun: yomg‘ir {p} mm, bug‘lanish {e} mm', fc_t:', {t} °C gacha', fc_hot:' — quruq va issiq',
+    low_conf:'Aniqlik past: uzoq vaqt kuchli yomg‘ir yoki sug‘orish bo‘lmagan, tuproq holati taxminiy.',
+    sat:'Oxirgi sun’iy yo‘ldosh surati: {d}',
+    a_balance:'Agronom: tuproqda suv yetishmayapti', a_stress:'Agronom: o‘simliklarda suv tanqisligi bor (sun’iy yo‘ldosh suratlari)',
+    a_performance:'Agronom: sug‘orishga qaramay o‘simliklar qurimoqda — tizimni tekshiring',
+    a_uniformity:'Agronom: dalaning bir qismi ancha quruq — sug‘orish tekisligini tekshiring',
+    a_generic:'Agronom dalada suv muammosini tasdiqladi', a_dose:'Tavsiya: {d} gacha taxminan {mm} mm ({m3} m³/ga).',
+    a_note:'Agronom izohi:',
+    ack_seen:'O‘qidim', ack_will_irrigate:'Sug‘oraman', ack_irrigated:'Sug‘ordim', ack_disagree:'Rozi emasman',
+    ack_done:'Javobingiz: {a}', ack_note_prompt:'Qisqacha: nega? (ixtiyoriy)',
+    btn_irr:'💧 Sug‘orishni yozish', btn_rain:'🌧 Yomg‘irni yozish',
+    f_date:'Sana', f_method:'Usul', f_amount:'Suv miqdori', f_unit_mm:'mm', f_unit_m3:'m³/ga', f_rain:'Yomg‘ir o‘lchagich (mm)',
+    f_save:'Saqlash', f_cancel:'Bekor qilish', saved:'Saqlandi. Rahmat!', err:'Xato: ',
+    meth_zalewowe:'egat / bostirib', meth_kroplowe:'tomchilatib', meth_deszczowanie:'yomg‘irlatib',
+    hist:'Oxirgi yozuvlar', h_irr:'Sug‘orish {d}: {a}', h_rain:'Yomg‘ir {d}: {mm} mm', h_noamt:'miqdorsiz',
+    foot:'Bu suv balansi modeli, ob-havo prognozi va sun’iy yo‘ldosh suratlari asosidagi taxmin — dalani ko‘zdan kechirish o‘rnini bosmaydi. Shubha bo‘lsa, agronomga qo‘ng‘iroq qiling.',
+  },
+};
+const LANGS = ['pl','en','ru','uz'];
+const TOKEN = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+let lang = 'pl', DATA = null;
+
+function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+function lsSet(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+function t(k, p){ let s = (L[lang] && L[lang][k]) || L.pl[k] || k;
+  if(p) for(const [a,b] of Object.entries(p)) s = s.split('{'+a+'}').join(b); return s; }
+function esc(s){ return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function n0(v){ return v == null ? '–' : Math.round(Number(v)).toLocaleString(lang === 'en' ? 'en-GB' : lang); }
+function fdate(iso){ if(!iso) return ''; const [y,m,d] = iso.slice(0,10).split('-'); return `${d}.${m}`; }
+function today(){ const d = new Date(); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0,10); }
+
+function renderLangs(){
+  document.getElementById('langs').innerHTML = LANGS.map(l =>
+    `<button type="button" class="${l===lang?'on':''}" onclick="setLang('${l}')">${l.toUpperCase()}</button>`).join('');
+}
+function setLang(l){ lang = l; lsSet('pm_farmer_lang', l); document.documentElement.lang = l; render(); }
+
+function statusBlock(f){
+  const b = f.balance, irr = f.irrigation_mode === 'irrigation';
+  if(!b){
+    return `<div class="status st-none"><div class="big">${esc(t('st_none'))}</div>
+      ${f.balance_error ? `<div class="txt">${esc(t('st_err'))}</div>` : ''}</div>`;
+  }
+  if(b.status === 'no_data') return `<div class="status st-none"><div class="big">${esc(t('st_none'))}</div></div>`;
+  const dose = b.suggested_dose_mm != null && irr
+    ? `<div class="dose">${esc(t('dose', {mm:n0(b.suggested_dose_mm), m3:n0(b.suggested_dose_m3_ha)}))}</div>` : '';
+  let cls, big, txt = '';
+  if(b.status === 'stress'){
+    cls = 'st-bad'; big = irr ? t('st_stress_irr') : t('st_stress_rf');
+  } else if(b.suggested_irrigation_date){
+    cls = 'st-warn'; big = irr ? t('st_soon_irr', {d: fdate(b.suggested_irrigation_date)})
+                               : t('st_soon_rf', {d: fdate(b.suggested_irrigation_date)});
+  } else if(b.status === 'approaching'){
+    cls = 'st-warn'; big = t('st_approach');
+  } else {
+    cls = 'st-ok'; big = t('st_ok');
+    const n = b.forecast && b.forecast.days;
+    if(n) txt = irr ? t('ok_horizon', {n}) : t('ok_horizon_rf', {n});
+  }
+  return `<div class="status ${cls}"><div class="big">${esc(big)}</div>${dose}
+    ${txt ? `<div class="txt">${esc(txt)}</div>` : ''}</div>`;
+}
+
+function gauge(f){
+  const b = f.balance;
+  if(!b || b.depletion_frac == null || !b.taw_mm) return '';
+  const left = Math.max(0, Math.min(1, 1 - b.depletion_frac));
+  const thr = Math.max(0, Math.min(1, 1 - (b.raw_mm || 0) / b.taw_mm));
+  const col = left <= thr ? 'var(--red)' : (left <= thr + 0.12 ? 'var(--amber)' : 'var(--blue)');
+  return `<div class="gauge"><div class="lbl"><span>${esc(t('gauge'))}</span><span>${Math.round(left*100)}%</span></div>
+    <div class="bar" title="${esc(t('gauge_hint'))}"><i style="width:${left*100}%;background:${col}"></i><s style="left:${thr*100}%"></s></div>
+    <div class="meta" style="margin-top:3px">${esc(t('gauge_hint'))}</div></div>`;
+}
+
+function forecast(f){
+  const fc = f.balance && f.balance.forecast;
+  if(!fc) return '';
+  let s = t('fc', {n: fc.days, p: n0(fc.precip_mm), e: n0(fc.et0_mm)});
+  if(fc.tmax_c != null) s += t('fc_t', {t: n0(fc.tmax_c)});
+  if(fc.dry_hot) s += t('fc_hot');
+  return `<div class="fc">${esc(s)}</div>`;
+}
+
+function alertBlock(a){
+  let head = t('a_' + a.kind);
+  let body = '';
+  if(a.dose_mm != null) body += `<div class="adv">${esc(t('a_dose', {mm:n0(a.dose_mm), m3:n0(a.dose_m3_ha), d: fdate(a.by_date)}))}</div>`;
+  if(a.advisor_note) body += `<div class="adv"><b>${esc(t('a_note'))}</b> ${esc(a.advisor_note)}</div>`;
+  const acks = a.farmer_ack
+    ? `<div class="done">✓ ${esc(t('ack_done', {a: t('ack_' + a.farmer_ack)}))}</div>`
+    : `<div class="acks">${['seen','will_irrigate','irrigated','disagree'].map(k =>
+        `<button type="button" class="b" onclick="ack(${a.id},'${k}')">${esc(t('ack_' + k))}</button>`).join('')}</div>`;
+  return `<div class="alert"><div class="t">⚠ ${esc(head)} <span class="meta">(${esc(fdate(a.obs_date))})</span></div>${body}${acks}</div>`;
+}
+
+function methodOptions(){
+  return ['kroplowe','deszczowanie','zalewowe'].map(m => `<option value="${m}">${esc(t('meth_' + m))}</option>`).join('');
+}
+
+function forms(f){
+  const td = today();
+  return `
+  <div class="actions">
+    ${f.irrigation_mode === 'irrigation'
+      ? `<button type="button" class="b p" onclick="toggleForm(${f.id},'irr')">${esc(t('btn_irr'))}</button>` : ''}
+    <button type="button" class="b" onclick="toggleForm(${f.id},'rain')">${esc(t('btn_rain'))}</button>
+  </div>
+  <form class="f" id="irr-${f.id}" onsubmit="return saveIrr(event, ${f.id})">
+    <div class="row">
+      <div><label>${esc(t('f_date'))}</label><input type="date" name="date" value="${td}" max="${td}" required></div>
+      <div><label>${esc(t('f_method'))}</label><select name="method">${methodOptions()}</select></div>
+    </div>
+    <label>${esc(t('f_amount'))}</label>
+    <div class="row">
+      <input type="number" name="amount" min="0" step="any" inputmode="decimal">
+      <select name="unit"><option value="mm">${esc(t('f_unit_mm'))}</option><option value="m3">${esc(t('f_unit_m3'))}</option></select>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button type="submit" class="b p">${esc(t('f_save'))}</button>
+      <button type="button" class="b" onclick="toggleForm(${f.id},'irr')">${esc(t('f_cancel'))}</button>
+    </div>
+  </form>
+  <form class="f" id="rain-${f.id}" onsubmit="return saveRain(event, ${f.id})">
+    <div class="row">
+      <div><label>${esc(t('f_date'))}</label><input type="date" name="date" value="${td}" max="${td}" required></div>
+      <div><label>${esc(t('f_rain'))}</label><input type="number" name="mm" min="0" max="300" step="any" inputmode="decimal" required></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <button type="submit" class="b p">${esc(t('f_save'))}</button>
+      <button type="button" class="b" onclick="toggleForm(${f.id},'rain')">${esc(t('f_cancel'))}</button>
+    </div>
+  </form>
+  <div class="msg" id="msg-${f.id}"></div>`;
+}
+
+function history(f){
+  const items = [
+    ...f.irrigations.map(e => ({d: e.date, s: t('h_irr', {d: fdate(e.date),
+        a: (e.amount_mm != null ? n0(e.amount_mm) + ' mm' : t('h_noamt')) + ' · ' + t('meth_' + e.method)})})),
+    ...f.rain.map(r => ({d: r.date, s: t('h_rain', {d: fdate(r.date), mm: n0(r.mm)})})),
+  ].sort((a, b) => b.d.localeCompare(a.d)).slice(0, 6);
+  if(!items.length) return '';
+  return `<details class="hist"><summary>${esc(t('hist'))}</summary><ul>${items.map(i => `<li>${esc(i.s)}</li>`).join('')}</ul></details>`;
+}
+
+function fieldCard(f){
+  const mode = f.irrigation_mode === 'irrigation' ? t('m_irrigation') : t('m_rainfed');
+  const crop = f.crop_type ? ` · ${esc(f.crop_type)}` : '';
+  const lowConf = f.balance && f.balance.initial_state_reliable === false ? `<div class="note">${esc(t('low_conf'))}</div>` : '';
+  const sat = f.last_obs && f.last_obs.date ? `<div class="note" style="font-style:normal">${esc(t('sat', {d: fdate(f.last_obs.date)}))}</div>` : '';
+  return `<section class="card">
+    <div class="card-h"><b>${esc(f.label)}</b><div class="meta">${esc(mode)}${crop}</div></div>
+    ${f.alerts.map(alertBlock).join('')}
+    ${statusBlock(f)}
+    ${gauge(f)}
+    ${forecast(f)}
+    ${lowConf}${sat}
+    ${forms(f)}
+    ${history(f)}
+  </section>`;
+}
+
+function render(){
+  renderLangs();
+  document.getElementById('h1').textContent = t('title');
+  document.title = 'PopMonitor · ' + t('title');
+  const main = document.getElementById('main');
+  if(!DATA){ return; }
+  const name = DATA.farmer && DATA.farmer.name;
+  document.getElementById('sub').textContent = (name ? `${t('hello')}, ${name} · ` : '') +
+    `${t('updated')} ${fdate(DATA.generated_at)} ${DATA.generated_at.slice(11,16)}`;
+  main.innerHTML = DATA.fields.length ? DATA.fields.map(fieldCard).join('') : `<p class="empty">${esc(t('no_fields'))}</p>`;
+  document.getElementById('foot').innerHTML = `<p>${esc(t('foot'))}</p>
+    <p>Open-Meteo.com (CC BY 4.0) · ERA5 / ERA5-Land · Copernicus Sentinel</p>`;
+}
+
+function showError(key){
+  renderLangs();
+  document.getElementById('main').innerHTML = `<p class="empty">${esc(t(key))}</p>`;
+}
+
+async function load(){
+  document.getElementById('main').innerHTML = `<p class="empty">${esc(t('loading'))}</p>`;
+  try{
+    const r = await fetch(`/api/f/${encodeURIComponent(TOKEN)}`);
+    if(r.status === 404){ showError('bad_link'); return; }
+    if(!r.ok) throw new Error(r.status);
+    DATA = await r.json();
+    if(!lsGet('pm_farmer_lang') && DATA.farmer && L[DATA.farmer.lang]){ lang = DATA.farmer.lang; document.documentElement.lang = lang; }
+    render();
+  }catch(e){ showError('net_err'); }
+}
+
+function toggleForm(id, which){
+  const el = document.getElementById(`${which}-${id}`);
+  const other = document.getElementById(`${which === 'irr' ? 'rain' : 'irr'}-${id}`);
+  other.classList.remove('open');
+  el.classList.toggle('open');
+}
+
+async function post(url, body){
+  const r = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if(!r.ok){
+    let d = r.status; try{ const j = await r.json(); d = typeof j.detail === 'string' ? j.detail : (j.detail && j.detail[0] && j.detail[0].msg) || d; }catch(e){}
+    throw new Error(d);
+  }
+  return r.json();
+}
+
+function flash(id, ok, text){
+  const el = document.getElementById(`msg-${id}`);
+  if(!el) return;
+  el.className = 'msg ' + (ok ? 'ok' : 'err'); el.textContent = text;
+}
+
+async function saveIrr(ev, id){
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const amt = parseFloat(String(fd.get('amount') || '').replace(',', '.'));
+  const body = {event_date: fd.get('date'), method: fd.get('method')};
+  if(amt > 0){ if(fd.get('unit') === 'm3') body.amount_m3_ha = amt; else body.amount_mm = amt; }
+  try{ await post(`/api/f/${encodeURIComponent(TOKEN)}/field/${id}/irrigation`, body);
+       await load(); flash(id, true, t('saved')); }
+  catch(e){ flash(id, false, t('err') + e.message); }
+  return false;
+}
+
+async function saveRain(ev, id){
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const mm = parseFloat(String(fd.get('mm') || '').replace(',', '.'));
+  try{ await post(`/api/f/${encodeURIComponent(TOKEN)}/field/${id}/rain`, {reading_date: fd.get('date'), precip_mm: mm});
+       await load(); flash(id, true, t('saved')); }
+  catch(e){ flash(id, false, t('err') + e.message); }
+  return false;
+}
+
+async function ack(alarmId, kind){
+  let note = null;
+  if(kind === 'disagree') note = prompt(t('ack_note_prompt')) || null;
+  try{ await post(`/api/f/${encodeURIComponent(TOKEN)}/alarm/${alarmId}/ack`, {ack: kind, note});
+       await load(); }
+  catch(e){ alert(t('err') + e.message); }
+}
+
+lang = (() => { const s = lsGet('pm_farmer_lang'); if(s && L[s]) return s;
+  const n = (navigator.language || 'pl').slice(0,2); return L[n] ? n : 'pl'; })();
+document.documentElement.lang = lang;
+load();
+</script>
+</body>
+</html>

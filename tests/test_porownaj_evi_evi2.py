@@ -13,7 +13,8 @@ def test_fit_linear_odtwarza_zaleznosc():
 def test_summarize_przelicza_progi():
     rows = [{"evi": e, "evi2": 0.94 * e} for e in (0.12, 0.2, 0.3, 0.45, 0.6)]
     s = pe.summarize(rows)
-    assert s["mapped_thresholds"]["high"] == round(0.94 * 0.50, 3)
+    import analytics
+    assert s["mapped_thresholds"]["high"] == round(0.94 * analytics.THRESHOLDS["evi"]["high"], 3)
     assert s["mean_abs_norm_diff_mapped"] < s["mean_abs_norm_diff_unmapped"]
     assert s["mean_rel_diff_pct"] == -6.0
 

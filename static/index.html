@@ -2093,7 +2093,9 @@ function _renderBiomass(data){
   el.innerHTML = `
     <div class="vd-fig-h">${esc(t('vd_bio_h'))}${_tip(tip)}</div>
     <div class="vd-big">${bioRange}<small>${esc(t('biomass_unit'))}</small></div>
-    <div class="vd-fig-sub"><span>${co2Range} ${esc(t('co2_unit'))}</span></div>`;
+    <div class="vd-fig-sub"><span>${co2Range} ${esc(t('co2_unit'))}</span></div>
+    ${bm.n_uptake_kg_ha != null ? `<div class="vd-fig-sub"><span>${esc(tf('bc_n_line', {lo: Math.round(bm.n_uptake_low_kg_ha), hi: Math.round(bm.n_uptake_high_kg_ha)}))}</span></div>` : ''}
+    <div class="vd-fig-sub" style="font-size:11px"><span>${bm.cire != null ? 'CIre ' + bm.cire.toFixed(2) + ' · ' : ''}${esc(t(bm.model_source === 'field_calibrated' ? 'bc_src_field' : 'bc_src_lit'))}${bm.cire_extrapolated ? ' · ' + esc(t('bc_extrap')) : ''}</span></div>`;
   el.hidden = false;
 }
 
@@ -3089,6 +3091,37 @@ addRowToTable();
     </section>
   </div>
 
+  <!-- Kalibracja biomasy/N poplonu z CIred-edge (biomass_calibration.py) -->
+  <section class="card" style="margin-bottom:20px">
+    <div class="card-h" style="display:flex;justify-content:space-between;align-items:center">
+      <span data-i18n="bc_h">Biomasa i azot poplonu — kalibracja na próbkach z pola (CIred-edge)</span>
+      <button class="secondary" type="button" style="font-size:12px;padding:5px 10px" data-i18n="btn_refresh" onclick="bcLoad()">⟳ Odśwież</button>
+    </div>
+    <div class="card-b">
+      <p class="hint" data-i18n="bc_intro">Obecny model biomasy pochodzi z literatury dla kukurydzy. CIred-edge (B07/B05 − 1) rośnie liniowo z chlorofilem i azotem w łanie i nie nasyca się przy bujnym poplonie — ale współczynników dla polskich mieszanek nie ma w literaturze. Wpisuj próbki z wizyt (ramki, ścięcie, ważenie): aplikacja dobierze najbliższą czystą scenę Sentinel-2, porówna modele i pozwoli zatwierdzić model na Twoich danych.</p>
+      <details style="margin:6px 0 10px"><summary style="cursor:pointer;font-size:12.5px;font-weight:600" data-i18n="bc_proto_h">Jak pobrać próbkę</summary>
+        <ol class="hint" style="margin:6px 0 0 18px;padding:0" id="bcProto"></ol></details>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:8px">
+        <label class="hint"><span data-i18n="bc_f_parcel">Nr działki (ULDK)</span><input type="text" id="bcParcel" placeholder="020101_1.0001.123"></label>
+        <label class="hint"><span data-i18n="bc_f_date">Data próbki</span><input type="date" id="bcDate"></label>
+        <label class="hint"><span data-i18n="bc_f_mix">Mieszanka / gatunek</span><input type="text" id="bcMix"></label>
+        <label class="hint"><span data-i18n="bc_f_frames">Liczba ramek</span><input type="number" id="bcFrames" value="4" min="1"></label>
+        <label class="hint"><span data-i18n="bc_f_frame_m2">Powierzchnia ramki (m²)</span><input type="number" id="bcFrameM2" value="0.25" step="0.01" min="0.01"></label>
+        <label class="hint"><span data-i18n="bc_f_fresh">Świeża masa — średnio z ramki (g)</span><input type="number" id="bcFresh" step="any" min="0"></label>
+        <label class="hint"><span data-i18n="bc_f_dmpct">Sucha masa (% świeżej)</span><input type="number" id="bcDmPct" value="14" step="0.1" min="1" max="100"></label>
+        <label class="hint"><span data-i18n="bc_f_dm">albo od razu: sucha masa (t/ha)</span><input type="number" id="bcDm" step="any" min="0"></label>
+        <label class="hint"><span data-i18n="bc_f_npct">N w suchej masie (%, opcjonalnie)</span><input type="number" id="bcNPct" step="0.01" min="0" max="10"></label>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap">
+        <button class="primary" type="button" onclick="bcAdd(this)" data-i18n="bc_add">Dodaj próbkę</button>
+        <span id="bcCalc" class="hint"></span>
+      </div>
+      <div id="bcAddOut" style="font-size:12px;margin-top:6px"></div>
+      <div id="bcList" style="margin-top:12px"></div>
+      <div id="bcFit" style="margin-top:12px;font-size:12px"></div>
+    </div>
+  </section>
+
   <!-- PANEL B: lista działek -->
   <section class="card">
     <div class="card-h" style="display:flex;justify-content:space-between;align-items:center">
@@ -3107,6 +3140,171 @@ addRowToTable();
 <script>
 /* === ZAKŁADKA MONITORING === */
 
+/* ===== Kalibracja biomasy/N z CIred-edge (biomass_calibration.py) ===== */
+let bcChart = null;
+function bcDmFromInputs(){
+  const direct = parseFloat(document.getElementById('bcDm').value);
+  if(direct >= 0 && !isNaN(direct)) return direct;
+  const fresh = parseFloat(document.getElementById('bcFresh').value);
+  const m2 = parseFloat(document.getElementById('bcFrameM2').value);
+  const pct = parseFloat(document.getElementById('bcDmPct').value);
+  if(!(fresh >= 0) || !(m2 > 0) || !(pct > 0)) return null;
+  return fresh / m2 * pct / 100 * 0.01;          // g/m² × 0,01 = t/ha
+}
+function bcUpdateCalc(){
+  const dm = bcDmFromInputs();
+  const npct = parseFloat(document.getElementById('bcNPct').value);
+  const el = document.getElementById('bcCalc');
+  if(!el) return;
+  el.textContent = dm == null ? '' : tf('bc_calc', {dm: dm.toFixed(2)}) +
+    (npct > 0 ? ' · ' + tf('bc_calc_n', {n: Math.round(dm * 10 * npct)}) : '');
+}
+['bcFresh','bcFrameM2','bcDmPct','bcDm','bcNPct'].forEach(id => {
+  const el = document.getElementById(id); if(el) el.addEventListener('input', bcUpdateCalc);
+});
+
+async function bcAdd(btn){
+  const out = document.getElementById('bcAddOut');
+  const dm = bcDmFromInputs();
+  const parcel = document.getElementById('bcParcel').value.trim();
+  const d = document.getElementById('bcDate').value;
+  if(!parcel || !d || dm == null){ out.innerHTML = `<span style="color:#B3261E">${esc(t('bc_missing'))}</span>`; return; }
+  const npct = parseFloat(document.getElementById('bcNPct').value);
+  const num = id => { const v = parseFloat(document.getElementById(id).value); return isNaN(v) ? null : v; };
+  const body = {parcel_id: parcel, sample_date: d, dm_t_ha: Math.round(dm * 1000) / 1000,
+    n_kg_ha: npct > 0 ? Math.round(dm * 10 * npct * 10) / 10 : null,
+    mix: document.getElementById('bcMix').value.trim() || null,
+    fresh_g: num('bcFresh'), frame_m2: num('bcFrameM2'), n_frames: num('bcFrames'),
+    dm_pct: num('bcDmPct'), n_pct: npct > 0 ? npct : null};
+  btn.disabled = true; out.textContent = t('bc_matching');
+  try{
+    const r = await fetch('/api/biomass/samples', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if(!r.ok) throw new Error(typeof j.detail === 'string' ? trServer(j.detail) : (j.detail && j.detail[0] && j.detail[0].msg) || r.status);
+    out.innerHTML = j.match && j.match.matched
+      ? `<span style="color:#2E7D32">${esc(tf('bc_added_ok', {d: j.sample.scene_date, c: j.sample.cire.toFixed(2)}))}</span>`
+      : `<span style="color:#A87716">${esc(t('bc_added_nomatch'))}</span>`;
+    ['bcFresh','bcDm','bcNPct'].forEach(id => document.getElementById(id).value = '');
+    bcUpdateCalc(); bcLoad();
+  }catch(e){ out.innerHTML = `<span style="color:#B3261E">${esc(t('cs_error'))}: ${esc(e.message)}</span>`; }
+  finally{ btn.disabled = false; }
+}
+
+async function bcLoad(){
+  const proto = document.getElementById('bcProto');
+  if(proto) proto.innerHTML = [1,2,3,4,5].map(i => `<li>${esc(t('bc_proto_' + i))}</li>`).join('');
+  const dEl = document.getElementById('bcDate'); if(dEl && !dEl.value) dEl.value = new Date().toISOString().slice(0,10);
+  try{
+    const [samples, fit] = await Promise.all([
+      fetch('/api/biomass/samples').then(r => r.json()), fetch('/api/biomass/fit').then(r => r.json())]);
+    bcRenderList(samples); bcRenderFit(fit);
+  }catch(e){
+    document.getElementById('bcList').innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
+  }
+}
+
+function bcRenderList(rows){
+  const el = document.getElementById('bcList');
+  if(!rows.length){ el.innerHTML = `<p class="hint">${esc(t('bc_empty'))}</p>`; return; }
+  el.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;font-size:12px;border-collapse:collapse">
+    <tr style="text-align:left;color:var(--muted)"><th>${esc(t('bc_f_date'))}</th><th>${esc(t('bc_col_parcel'))}</th><th>${esc(t('bc_f_mix'))}</th>
+      <th>${esc(t('bc_col_dm'))}</th><th>N kg/ha</th><th>CIre</th><th>${esc(t('bc_col_scene'))}</th><th></th></tr>
+    ${rows.map(r => `<tr style="border-top:1px solid var(--line)">
+      <td>${esc(r.sample_date)}</td><td class="mono">${esc(r.parcel_id)}</td><td>${esc(r.mix || '')}</td>
+      <td>${r.dm_t_ha.toFixed(2)}</td><td>${r.n_kg_ha != null ? Math.round(r.n_kg_ha) : '—'}</td>
+      <td>${r.cire != null ? r.cire.toFixed(2) : '—'}</td>
+      <td>${r.scene_date ? esc(r.scene_date) + ` (±${r.delta_days} d)` :
+        `<button class="secondary" type="button" style="font-size:11px;padding:2px 6px" onclick="bcRematch(${r.id}, this)">${esc(t('bc_rematch'))}</button>`}</td>
+      <td><button class="secondary" type="button" style="font-size:11px;padding:2px 6px" onclick="bcDelete(${r.id})">✕</button></td></tr>`).join('')}
+  </table></div>`;
+}
+
+async function bcRematch(id, btn){
+  btn.disabled = true;
+  const r = await fetch(`/api/biomass/samples/${id}/rematch`, {method:'POST'});
+  if(!r.ok){ btn.disabled = false; btn.textContent = t('bc_rematch_fail'); return; }
+  bcLoad();
+}
+async function bcDelete(id){
+  if(!confirm(t('bc_delete_confirm'))) return;
+  await fetch(`/api/biomass/samples/${id}`, {method:'DELETE'}); bcLoad();
+}
+
+function bcModelTxt(m, unit){
+  if(!m) return '—';
+  const f = m.form === 'log' ? `ln(y) = ${m.a} + ${m.b}·CIre` : `y = ${m.a} + ${m.b}·CIre`;
+  return `${f} · n=${m.n} · R² ${m.r2 != null ? m.r2.toFixed(2) : '—'} · ${esc(t('bc_rmse_cv'))} ±${m.rmse_cv.toFixed(2)} ${unit}`;
+}
+
+function bcRenderFit(fit){
+  const el = document.getElementById('bcFit');
+  if(bcChart){ try{ bcChart.destroy(); }catch(e){} bcChart = null; }
+  const act = fit.active || {};
+  const activeHtml = `<div style="font-size:12px"><b>${esc(t('bc_active'))}</b>
+    <div>${esc(t('bc_target_dm'))}: ${act.biomass ? bcModelTxt(act.biomass, 't/ha') +
+      ` <button class="secondary" type="button" style="font-size:11px;padding:2px 6px" onclick="bcClear('biomass')">${esc(t('bc_clear'))}</button>` : esc(t('bc_lit_model'))}</div>
+    <div>${esc(t('bc_target_n'))}: ${act.n_uptake ? bcModelTxt(act.n_uptake, 'kg/ha') +
+      ` <button class="secondary" type="button" style="font-size:11px;padding:2px 6px" onclick="bcClear('n')">${esc(t('bc_clear'))}</button>` : '—'}</div></div>`;
+  if(!fit.n_usable){ el.innerHTML = activeHtml; return; }
+  const cmp = [];
+  if(fit.biomass) cmp.push(['CIre (' + (fit.biomass.form === 'log' ? 'log' : t('bc_linear')) + ')', fit.biomass.n, fit.biomass.rmse_cv, fit.biomass.r2, true]);
+  (fit.compare || []).forEach(c => cmp.push([c.index + ' (' + (c.form === 'log' ? 'log' : t('bc_linear')) + ')', c.n, c.rmse_cv, c.r2, false]));
+  if(fit.literature) cmp.push([t('bc_lit_model'), fit.literature.n, fit.literature.rmse, null, false]);
+  const warns = (fit.warnings || []).map(w => `<li>${esc(trServer(w))}</li>`).join('');
+  el.innerHTML = `${activeHtml}
+    <div style="margin-top:10px;font-size:12px"><b>${esc(tf('bc_fit_h', {n: fit.n_usable}))}</b></div>
+    ${warns ? `<ul class="hint" style="margin:4px 0 0 16px;padding:0">${warns}</ul>` : ''}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin-top:6px">
+      <div><table style="width:100%;font-size:12px;border-collapse:collapse">
+        <tr style="text-align:left;color:var(--muted)"><th>${esc(t('bc_col_model'))}</th><th>n</th><th>${esc(t('bc_rmse_cv'))} t/ha</th><th>R²</th></tr>
+        ${cmp.map(c => `<tr style="border-top:1px solid var(--line);${c[4] ? 'font-weight:600' : ''}"><td>${esc(c[0])}</td><td>${c[1]}</td>
+          <td>${c[2].toFixed(2)}</td><td>${c[3] != null ? c[3].toFixed(2) : '—'}</td></tr>`).join('')}
+      </table>
+      <div class="hint" style="margin-top:4px">${esc(t('bc_cmp_hint'))}</div>
+      ${fit.biomass ? `<div style="margin-top:6px">${bcModelTxt(fit.biomass, 't/ha')}</div>` : ''}
+      ${fit.n_uptake ? `<div style="margin-top:2px">N: ${bcModelTxt(fit.n_uptake, 'kg/ha')}</div>` : ''}
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        <button class="secondary" type="button" style="font-size:12px" ${fit.can_apply_biomass ? '' : 'disabled'} onclick="bcApply('biomass')">${esc(t('bc_apply_dm'))}</button>
+        <button class="secondary" type="button" style="font-size:12px" ${fit.can_apply_n ? '' : 'disabled'} onclick="bcApply('n')">${esc(t('bc_apply_n'))}</button>
+      </div>
+      <div id="bcApplyOut" style="font-size:12px;margin-top:4px"></div></div>
+      <div style="height:240px"><canvas id="bcChartCv"></canvas></div>
+    </div>`;
+  const cv = document.getElementById('bcChartCv');
+  if(cv){
+    const pts = fit.points.map(p => ({x: p.cire, y: p.dm_t_ha}));
+    const ds = [{label: t('bc_samples'), data: pts, backgroundColor: '#1E6FB0', pointRadius: 4}];
+    if(fit.biomass){
+      const m = fit.biomass, line = [];
+      for(let i = 0; i <= 40; i++){
+        const x = m.x_min + (m.x_max - m.x_min) * i / 40;
+        line.push({x, y: m.form === 'log' ? Math.exp(m.a + m.b * x) * m.smear : Math.max(0, m.a + m.b * x)});
+      }
+      ds.push({label: t('bc_fit_line'), data: line, type: 'line', borderColor: '#B3261E', borderWidth: 2, pointRadius: 0});
+    }
+    bcChart = new Chart(cv, {type: 'scatter', data: {datasets: ds},
+      options: {responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {legend: {labels: {boxWidth: 10, font: {size: 10}}}},
+        scales: {x: {title: {display: true, text: 'CIred-edge'}}, y: {min: 0, title: {display: true, text: t('bc_col_dm')}}}}});
+  }
+}
+
+async function bcApply(target){
+  if(!confirm(t(target === 'n' ? 'bc_apply_n_confirm' : 'bc_apply_dm_confirm'))) return;
+  const out = document.getElementById('bcApplyOut');
+  const r = await fetch('/api/biomass/model/apply', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({target})});
+  const j = await r.json();
+  if(!r.ok){ out.innerHTML = `<span style="color:#B3261E">${esc(trServer(String(j.detail || r.status)))}</span>`; return; }
+  out.innerHTML = `<span style="color:#2E7D32">${esc(tf('bc_applied', {n: j.recomputed_observations}))}</span>`;
+  bcLoad();
+}
+async function bcClear(target){
+  if(!confirm(t('bc_clear_confirm'))) return;
+  await fetch(`/api/biomass/model/${target}`, {method:'DELETE'}); bcLoad();
+}
+
+
 document.getElementById('tabMonitor').addEventListener('click', () => switchTab('monitor'));
 
 const _origSwitchTab = switchTab;
@@ -3117,6 +3315,7 @@ switchTab = function(mode){
   if(mode === 'monitor'){
     loadMonitorList();
     loadCalibrationStatus();
+    bcLoad();
   }
 };
 
@@ -3539,10 +3738,11 @@ async function applyCalibration(newHigh, newMid){
       <div class="card-b">
         <p class="hint" style="margin-bottom:10px" data-i18n="w_triage_hint">
           Alerty z silnika anomalii trafiają tu jako pierwsze — dopiero potwierdzony alert
-          ma trafić do panelu rolnika (kolejny krok planu, jeszcze nie zrobiony).
+          trafia do panelu rolnika (i SMS-em, jeśli zaznaczysz).
           Każdy wynik jest niekalibrowany i wymaga potwierdzenia w terenie.
         </p>
         <div id="waterTriageList"><p class="empty-hint" style="padding:16px 0;text-align:center" data-i18n="w_loading">Ładowanie...</p></div>
+        <div id="waterTriageMsg" style="font-size:12px;margin-top:6px"></div>
         <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--line)">
           <div style="font-size:12.5px;font-weight:600" data-i18n="w_cal_h">Kalibracja progu z ocenionej powtórki</div>
           <p class="hint" style="margin:4px 0 8px" data-i18n="w_cal_hint">Oceń alarmy w „Powtórce na historii” (trafny / fałszywy) i dopisz przeoczone problemy. Sugestia progu uwzględnia oba rodzaje błędów.</p>
@@ -3552,6 +3752,24 @@ async function applyCalibration(newHigh, newMid){
       </div>
     </section>
   </div>
+
+  <!-- Rolnicy i SMS (farmer_panel.py) -->
+  <section class="card" style="margin-bottom:20px">
+    <div class="card-h" style="display:flex;justify-content:space-between;align-items:center">
+      <span data-i18n="fm_h">Rolnicy: panel i SMS</span>
+      <button class="secondary" type="button" style="font-size:12px;padding:5px 10px" data-i18n="btn_refresh"
+        onclick="loadFarmers()">⟳ Odśwież</button>
+    </div>
+    <div class="card-b">
+      <p class="hint" style="margin-bottom:6px" data-i18n="fm_hint">Każdy rolnik (numer telefonu przy polu) ma własną stronę z linku: stan wody w glebie, sugestia nawodnienia, potwierdzone przez Ciebie alerty z możliwością odpowiedzi oraz zapis nawodnień i deszczomierza. SMS idzie tylko po potwierdzeniu alertu albo na Twoje polecenie — chyba że włączysz rolnikowi automatyczne sugestie.</p>
+      <div id="fmStatus" style="font-size:12px;margin-bottom:10px"></div>
+      <div id="fmList"><p class="empty-hint" data-i18n="w_loading">Ładowanie...</p></div>
+      <details style="margin-top:10px">
+        <summary style="cursor:pointer;font-size:12.5px;font-weight:600" data-i18n="fm_outbox_h">Skrzynka SMS (ostatnie 20)</summary>
+        <div id="fmOutbox" style="margin-top:6px"></div>
+      </details>
+    </div>
+  </section>
 
   <!-- Mapa pol ze statusem (sekcja 6.1 planu) -->
   <section class="card" style="margin-bottom:20px">
@@ -3625,12 +3843,30 @@ switchTab = function(mode){
   }
 };
 
+/* Nazwy miejscowości, granice i drogi (Esri Reference) — nakładka na zdjęcie
+ * satelitarne/ortofotomapę, żeby było wiadomo, gdzie się jest. Własny pane nad
+ * poligonami, bez przechwytywania kliknięć. */
+function labelsOverlay(map){
+  if(!map.getPane('labelsPane')){
+    map.createPane('labelsPane');
+    map.getPane('labelsPane').style.zIndex = 450;
+    map.getPane('labelsPane').style.pointerEvents = 'none';
+  }
+  const opt = {maxZoom:20, maxNativeZoom:19, pane:'labelsPane'};
+  return L.layerGroup([
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}', opt),
+    L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', opt),
+  ]);
+}
+
 let yieldMap = null, yieldLayer = null;
 function initYieldMap(){
   if(yieldMap) return;
   yieldMap = L.map('yieldMap', {scrollWheelZoom:false, maxZoom:20});
   L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     {maxZoom:20, maxNativeZoom:19, attribution:'Tiles © Esri — Esri, Maxar, Earthstar Geographics'}).addTo(yieldMap);
+  const yLabels = labelsOverlay(yieldMap).addTo(yieldMap);
+  L.control.layers({}, {[t('wm_labels')]: yLabels}).addTo(yieldMap);
   yieldLayer = L.layerGroup().addTo(yieldMap);
   yieldMap.setView([52.1, 19.3], 6);
 }
@@ -3740,6 +3976,7 @@ switchTab = function(mode){
     loadWaterFieldList();
     loadWaterTriageQueue();
     loadWaterPlanUpcoming();
+    loadFarmers();
   }
 };
 
@@ -3833,7 +4070,9 @@ function wmInitMap(){
     'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMTS/StandardResolution?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=Raster&STYLE=default&FORMAT=image/jpeg&TILEMATRIXSET=EPSG:3857&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
     {maxZoom:20, maxNativeZoom:19, attribution:'Ortofotomapa © GUGiK'});
   sat.addTo(WM.map);
-  L.control.layers({[t('wm_layer_sat')]: sat, [t('layer_orto')]: orto, 'OpenStreetMap': osm}).addTo(WM.map);
+  const labels = labelsOverlay(WM.map).addTo(WM.map);
+  L.control.layers({[t('wm_layer_sat')]: sat, [t('layer_orto')]: orto, 'OpenStreetMap': osm},
+                   {[t('wm_labels')]: labels}).addTo(WM.map);
   WM.vertLayer = L.layerGroup().addTo(WM.map);
   WM.parcelLayer = L.layerGroup().addTo(WM.map);
   WM.map.on('click', wmOnClick);
@@ -4232,7 +4471,30 @@ async function waterFieldAdd(){
 }
 
 const waterHistoryCharts = {};
+const waterChartObs = {};
 
+const waterStressBands = {
+  id: 'waterStressBands',
+  beforeDatasetsDraw(c){
+    const periods = (c.options.plugins.waterStressBands || {}).periods || [];
+    if(!periods.length) return;
+    const {ctx, chartArea, scales:{x}} = c;
+    if(!x || !chartArea) return;
+    const dayPx = Math.abs(x.getPixelForValue(new Date('2026-01-02T00:00:00'))
+      - x.getPixelForValue(new Date('2026-01-01T00:00:00'))) || 6;
+    ctx.save();
+    ctx.fillStyle = 'rgba(179, 38, 30, 0.16)';
+    periods.forEach(p => {
+      const x1 = x.getPixelForValue(new Date(p.from + 'T00:00:00'));
+      const x2 = x.getPixelForValue(new Date(p.to + 'T00:00:00')) + dayPx;
+      const left = Math.max(chartArea.left, Math.min(x1, x2));
+      const right = Math.min(chartArea.right, Math.max(x1, x2));
+      if(right <= left) return;
+      ctx.fillRect(left, chartArea.top, right - left, chartArea.bottom - chartArea.top);
+    });
+    ctx.restore();
+  }
+};
 const waterAlarmMarks = {
   id: 'waterAlarmMarks',
   beforeDatasetsDraw(c){
@@ -4245,7 +4507,7 @@ const waterAlarmMarks = {
       const px = x.getPixelForValue(new Date(p.x + 'T00:00:00'));
       if(px < chartArea.left || px > chartArea.right) return;
       ctx.strokeStyle = p.color;
-      ctx.globalAlpha = p.faded ? 0.35 : 0.75;
+      ctx.globalAlpha = p.faded ? 0.35 : 0.9;
       ctx.setLineDash([3, 3]);
       ctx.lineWidth = 1.25;
       ctx.beginPath();
@@ -4256,8 +4518,9 @@ const waterAlarmMarks = {
     ctx.restore();
   }
 };
-if(typeof Chart !== 'undefined' && !Chart.registry.plugins.get('waterAlarmMarks')){
-  Chart.register(waterAlarmMarks);
+if(typeof Chart !== 'undefined'){
+  if(!Chart.registry.plugins.get('waterStressBands')) Chart.register(waterStressBands);
+  if(!Chart.registry.plugins.get('waterAlarmMarks')) Chart.register(waterAlarmMarks);
 }
 
 function destroyWaterChart(fieldId){
@@ -4296,19 +4559,52 @@ function waterAlarmPoints(observations, alarms){
   }).filter(p => p.y != null);
 }
 
-function drawWaterHistoryChart(fieldId, observations, alarms){
+function mergeWaterAlarms(stored, replayAlarms){
+  const key = a => (a.obs_date || '') + '|' + (a.risk_type || '');
+  const map = new Map();
+  (replayAlarms || []).forEach(a => { if(a && a.obs_date) map.set(key(a), a); });
+  (stored || []).forEach(a => { if(a && a.obs_date) map.set(key(a), a); });
+  return [...map.values()];
+}
+
+function stressPeriodsFromReplay(replay){
+  if(replay && Array.isArray(replay.stress_periods) && replay.stress_periods.length)
+    return replay.stress_periods;
+  const rows = ((replay && replay.rows) || [])
+    .filter(r => r && r.balance_status === 'stress' && r.obs_date)
+    .map(r => r.obs_date).sort();
+  if(!rows.length) return [];
+  const periods = [];
+  let start = rows[0], prev = rows[0];
+  rows.slice(1).forEach(d => {
+    const gap = (new Date(d + 'T00:00:00') - new Date(prev + 'T00:00:00')) / 86400000;
+    if(gap <= 21) prev = d;
+    else { periods.push({from: start, to: prev}); start = prev = d; }
+  });
+  periods.push({from: start, to: prev});
+  return periods;
+}
+
+function drawWaterHistoryChart(fieldId, observations, alarms, replay){
   destroyWaterChart(fieldId);
   const canvas = document.getElementById(`waterChart_${fieldId}`);
   if(!canvas || typeof Chart === 'undefined') return;
+  const periods = stressPeriodsFromReplay(replay);
   const ndmi = waterSeriesPts(observations, 'ndwi_mean');
   const ndvi = waterSeriesPts(observations, 'ndvi_mean');
-  const marks = waterAlarmPoints(observations, alarms);
-  const dates = ndmi.map(p => p.x).concat(ndvi.map(p => p.x), marks.map(p => p.x)).sort();
+  const marks = waterAlarmPoints(observations, mergeWaterAlarms(alarms, (replay && replay.alarms) || []));
+  const dates = ndmi.map(p => p.x).concat(ndvi.map(p => p.x), marks.map(p => p.x),
+    periods.flatMap(p => [p.from, p.to])).filter(Boolean).sort();
   if(!dates.length) return;
   const spanDays = Math.round((new Date(dates[dates.length - 1]) - new Date(dates[0])) / 86400000);
   const pad = d => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + (spanDays < 14 ? 2 : 4)); return x; };
   const minD = pad(dates[0]); minD.setDate(minD.getDate() - (spanDays < 14 ? 4 : 8));
   const datasets = [];
+  if(periods.length) datasets.push({
+    label: t('w_chart_stress'), data: [],
+    backgroundColor: 'rgba(179, 38, 30, 0.28)', borderColor: 'rgba(179, 38, 30, 0.7)',
+    pointRadius: 0,
+  });
   if(ndmi.length) datasets.push({
     label: 'NDMI', data: ndmi, borderColor: '#2F6FA8', backgroundColor: '#2F6FA8',
     pointRadius: 3, tension: 0.25, spanGaps: true,
@@ -4318,7 +4614,7 @@ function drawWaterHistoryChart(fieldId, observations, alarms){
     pointRadius: 2, borderWidth: 1.4, tension: 0.25, spanGaps: true,
   });
   if(marks.length) datasets.push({
-    alarmMarks: true, label: t('w_chart_alarm'), type: 'scatter', data: marks,
+    alarmMarks: true, label: t('w_chart_warn'), type: 'scatter', data: marks,
     pointStyle: 'triangle', pointRadius: 7, pointHoverRadius: 8,
     pointBackgroundColor: marks.map(p => p.color),
     pointBorderColor: '#fff', pointBorderWidth: 1, showLine: false,
@@ -4338,11 +4634,12 @@ function drawWaterHistoryChart(fieldId, observations, alarms){
         y: {grace: '18%', ticks: {font: {size: 10}}, grid: {color: 'rgba(0,0,0,.06)'}},
       },
       plugins: {
+        waterStressBands: {periods},
         legend: {position: 'bottom', labels: {boxWidth: 10, font: {size: 11}, padding: 8}},
         tooltip: {callbacks: {
           label(c){
             if(c.dataset.alarmMarks) return (c.raw.labels || []).map(s => '⚠ ' + s);
-            if(c.parsed.y == null) return '';
+            if(c.parsed.y == null || c.dataset.data.length === 0) return '';
             return `${c.dataset.label} ${Number(c.parsed.y).toFixed(3)}`;
           }
         }}
@@ -4384,11 +4681,17 @@ function renderWaterFieldCard(f){
     </div>
     <div id="waterVerdict_${f.id}"></div>
     <div id="waterBalance_${f.id}"></div>
+    <div id="waterOptram_${f.id}"></div>
+    <div id="waterThermal_${f.id}"></div>
     <div class="monitor-actions">
       <button class="secondary" style="font-size:12px" type="button"
         onclick="waterFieldCheckNow(${f.id}, this)">${esc(t('w_check_now'))}</button>
       <button class="secondary" style="font-size:12px" type="button"
         onclick="waterFieldBalance(${f.id}, this)">${esc(t('w_balance'))}</button>
+      <button class="secondary" style="font-size:12px" type="button"
+        onclick="waterOptramToggle(${f.id})">${esc(t('op_btn'))}</button>
+      <button class="secondary" style="font-size:12px" type="button"
+        onclick="waterThermalToggle(${f.id})">${esc(t('th_btn'))}</button>
       <button class="secondary" style="font-size:12px" type="button"
         onclick="waterToggleDetails(${f.id})">${esc(t('w_history'))}</button>
       <button class="secondary" style="font-size:12px" type="button"
@@ -4415,6 +4718,282 @@ async function loadWaterFieldList(){
   }catch(e){
     el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
   }
+}
+
+/* ===== OPTRAM — wilgotność wierzchniej warstwy z Sentinel-2 (optram.py) ===== */
+const optramCharts = {};
+function optramDestroy(id){
+  (optramCharts[id] || []).forEach(c => { try{ c.destroy(); }catch(e){} });
+  delete optramCharts[id];
+}
+
+async function waterOptramToggle(id){
+  const el = document.getElementById(`waterOptram_${id}`);
+  if(el.dataset.open === '1'){ optramDestroy(id); el.innerHTML = ''; el.dataset.open = ''; return; }
+  el.dataset.open = '1';
+  await waterOptramLoad(id);
+}
+
+async function waterOptramLoad(id){
+  const el = document.getElementById(`waterOptram_${id}`);
+  el.innerHTML = `<p class="hint" style="margin-top:8px">${esc(t('w_loading'))}</p>`;
+  try{
+    const r = await fetch(`/api/water/field/${id}/optram`);
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || r.status);
+    renderOptram(id, d);
+  }catch(e){
+    el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
+  }
+}
+
+function optramCalibForm(id, again){
+  return `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px">
+    <select id="opMonths_${id}" style="width:auto;font-size:12px">
+      <option value="6">${esc(tf('op_months', {n: 6}))}</option>
+      <option value="12" selected>${esc(tf('op_months', {n: 12}))}</option>
+      <option value="24">${esc(tf('op_months', {n: 24}))}</option>
+    </select>
+    <button class="secondary" type="button" style="font-size:12px" onclick="waterOptramCalibrate(${id}, this)">
+      ${esc(t(again ? 'op_recalibrate' : 'op_calibrate'))}</button>
+    <span class="hint">${esc(t('op_calib_cost'))}</span>
+  </div>`;
+}
+
+function renderOptram(id, d){
+  optramDestroy(id);
+  const el = document.getElementById(`waterOptram_${id}`);
+  const box = inner => `<div style="margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px">
+    <div style="font-weight:600;margin-bottom:4px">${esc(t('op_title'))}</div>${inner}</div>`;
+  if(!d.calibrated){
+    el.innerHTML = box(`<div class="hint">${esc(t('op_intro'))}</div>${optramCalibForm(id, false)}
+      <div id="opOut_${id}" style="margin-top:6px"></div>`);
+    return;
+  }
+  const p = d.params, c = d.current;
+  const qCol = {good:'#2E7D32', limited:'#A87716', poor:'#B3261E'}[p.quality] || 'inherit';
+  let head = '';
+  if(c){
+    const col = c.w < 0.3 ? '#B3261E' : (c.w < 0.6 ? '#A87716' : '#1E6FB0');
+    head = `<div style="font-size:13px"><b style="color:${col}">W = ${c.w.toFixed(2)}</b>
+      · ${esc(t('op_cls_' + (c.w < 0.3 ? 'dry' : c.w < 0.6 ? 'mid' : 'wet')))} · ${esc(c.obs_date)}
+      ${c.season_pct != null ? ' · ' + esc(tf('op_pct', {p: Math.round(c.season_pct)})) : ''}</div>
+      ${c.dense_canopy ? `<div class="hint">${esc(t('op_dense'))}</div>` : ''}`;
+  } else {
+    head = `<div class="hint">${esc(t('op_no_series'))}</div>`;
+  }
+  const era = d.era5 && d.era5.r != null
+    ? `<div style="margin-top:4px">${esc(tf('op_era5', {r: d.era5.r.toFixed(2), n: d.era5.n}))}
+        <span class="hint">${esc(t(d.era5.r >= 0.5 ? 'op_era5_good' : d.era5.r >= 0.2 ? 'op_era5_mid' : 'op_era5_bad'))}</span></div>`
+    : `<div class="hint" style="margin-top:4px">${esc(t('op_era5_none'))}</div>`;
+  const warns = (d.warnings || []).map(w => `<li>${esc(trServer(w))}</li>`).join('');
+  el.innerHTML = box(`${head}
+    <div style="margin-top:4px">${esc(t('op_quality'))}: <b style="color:${qCol}">${esc(t('op_q_' + p.quality))}</b>
+      · ${esc(tf('op_calib_info', {from: p.date_from, to: p.date_to, s: p.n_scenes, px: p.n_px.toLocaleString()}))}</div>
+    ${warns ? `<ul class="hint" style="margin:4px 0 0 16px;padding:0">${warns}</ul>` : ''}
+    ${era}
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:8px">
+      <div><div class="hint">${esc(t('op_chart_trap'))}</div><div style="height:220px"><canvas id="opTrap_${id}"></canvas></div></div>
+      <div><div class="hint">${esc(t('op_chart_series'))}</div><div style="height:220px"><canvas id="opSeries_${id}"></canvas></div></div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+      <button class="secondary" type="button" style="font-size:12px" onclick="waterOptramRefresh(${id}, this)">${esc(t('op_refresh'))}</button>
+      <button class="secondary" type="button" style="font-size:12px" onclick="waterOptramDelete(${id})">${esc(t('op_delete'))}</button>
+    </div>
+    ${optramCalibForm(id, true)}
+    <div id="opOut_${id}" style="margin-top:6px"></div>
+    <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">${esc(t('op_how'))}</summary>
+      <div class="hint" style="margin-top:4px">${esc(t('op_intro'))}</div>
+      <div class="hint" style="margin-top:4px">${esc(t('op_caveats'))}</div>
+      <div class="hint" style="margin-top:4px;font-family:monospace">STR_d = ${p.i_d} + ${p.s_d}·NDVI (R² ${p.r2_d}) · STR_w = ${p.i_w} + ${p.s_w}·NDVI (R² ${p.r2_w})</div>
+    </details>
+    <div class="hint" style="margin-top:4px">${esc(trServer(d.calibration_status || ""))}</div>`);
+  drawOptramCharts(id, d);
+}
+
+function drawOptramCharts(id, d){
+  const p = d.params, charts = [];
+  const trap = document.getElementById(`opTrap_${id}`);
+  if(trap){
+    const line = (i, s) => [0, 0.9].map(x => ({x, y: i + s * x}));
+    charts.push(new Chart(trap, {
+      type: 'scatter',
+      data: {datasets: [
+        {label: t('op_pixels'), data: d.scatter.map(([x, y]) => ({x, y})), pointRadius: 1.2,
+         backgroundColor: 'rgba(90,110,90,0.25)', borderWidth: 0},
+        {label: t('op_edge_dry'), data: line(p.i_d, p.s_d), type: 'line', borderColor: '#B3261E',
+         borderWidth: 2, pointRadius: 0},
+        {label: t('op_edge_wet'), data: line(p.i_w, p.s_w), type: 'line', borderColor: '#1E6FB0',
+         borderWidth: 2, pointRadius: 0},
+        {label: t('op_field'), data: d.series.map(s => ({x: s.ndvi, y: p.i_d + p.s_d * s.ndvi + s.w * ((p.i_w + p.s_w * s.ndvi) - (p.i_d + p.s_d * s.ndvi))})),
+         pointRadius: 3, backgroundColor: '#E39B2B'},
+      ]},
+      options: {responsive: true, maintainAspectRatio: false, animation: false,
+        plugins: {legend: {labels: {boxWidth: 10, font: {size: 10}}}},
+        scales: {x: {min: 0, max: 0.9, title: {display: true, text: 'NDVI'}},
+                 y: {min: 0, title: {display: true, text: 'STR'}}}}
+    }));
+  }
+  const ser = document.getElementById(`opSeries_${id}`);
+  if(ser){
+    const sm = (d.era5 && d.era5.points) || [];
+    charts.push(new Chart(ser, {
+      type: 'line',
+      data: {datasets: [
+        {label: 'W (OPTRAM)', data: d.series.map(s => ({x: s.obs_date, y: s.w})), borderColor: '#1E6FB0',
+         backgroundColor: '#1E6FB0', pointRadius: 2.5, tension: 0.2, yAxisID: 'y'},
+        {label: t('op_era5_label'), data: sm.map(s => ({x: s.date, y: s.sm_0_7})), borderColor: '#8A6D3B',
+         borderDash: [4, 3], pointRadius: 2, tension: 0.2, yAxisID: 'y2'},
+      ]},
+      options: {responsive: true, maintainAspectRatio: false, animation: false, parsing: false,
+        plugins: {legend: {labels: {boxWidth: 10, font: {size: 10}}}},
+        scales: {x: {type: 'category', labels: [...new Set([...d.series.map(s => s.obs_date), ...sm.map(s => s.date)])].sort(),
+                     ticks: {maxTicksLimit: 6, font: {size: 9}}},
+                 y: {min: 0, max: 1, title: {display: true, text: 'W'}},
+                 y2: {position: 'right', grid: {drawOnChartArea: false}, title: {display: true, text: 'ERA5 m³/m³'}}}}
+    }));
+  }
+  optramCharts[id] = charts;
+}
+
+async function waterOptramCalibrate(id, btn){
+  const months = parseInt(document.getElementById(`opMonths_${id}`).value, 10);
+  const out = document.getElementById(`opOut_${id}`);
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = t('op_calibrating');
+  try{
+    const r = await fetch(`/api/water/field/${id}/optram/calibrate`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({months})});
+    const d = await r.json();
+    if(!r.ok) throw new Error(trServer(String(d.detail || r.status)));
+    renderOptram(id, d);
+  }catch(e){
+    out.innerHTML = `<span style="color:#B3261E">${esc(t('cs_error'))}: ${esc(e.message)}</span>`;
+  }finally{ btn.disabled = false; btn.textContent = orig; }
+}
+
+async function waterOptramRefresh(id, btn){
+  btn.disabled = true;
+  try{
+    const r = await fetch(`/api/water/field/${id}/optram/refresh`, {method:'POST'});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || r.status);
+    renderOptram(id, d);
+  }catch(e){
+    const out = document.getElementById(`opOut_${id}`);
+    if(out) out.innerHTML = `<span style="color:#B3261E">${esc(t('cs_error'))}: ${esc(e.message)}</span>`;
+    btn.disabled = false;
+  }
+}
+
+async function waterOptramDelete(id){
+  if(!confirm(t('op_delete_confirm'))) return;
+  await fetch(`/api/water/field/${id}/optram`, {method:'DELETE'});
+  waterOptramLoad(id);
+}
+
+/* ===== Termika Landsat 8/9 (thermal.py) ===== */
+const thermalCharts = {};
+function thermalDestroy(id){ if(thermalCharts[id]){ try{ thermalCharts[id].destroy(); }catch(e){} delete thermalCharts[id]; } }
+
+async function waterThermalToggle(id){
+  const el = document.getElementById(`waterThermal_${id}`);
+  if(el.dataset.open === '1'){ thermalDestroy(id); el.innerHTML = ''; el.dataset.open = ''; return; }
+  el.dataset.open = '1';
+  el.innerHTML = `<p class="hint" style="margin-top:8px">${esc(t('w_loading'))}</p>`;
+  try{
+    const r = await fetch(`/api/water/field/${id}/thermal`);
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || r.status);
+    renderThermal(id, d);
+  }catch(e){ el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`; }
+}
+
+function thermalTsiColor(v){ return v == null ? 'inherit' : (v < 0.25 ? '#2E7D32' : (v < 0.5 ? '#A87716' : '#B3261E')); }
+
+function renderThermal(id, d){
+  thermalDestroy(id);
+  const el = document.getElementById(`waterThermal_${id}`);
+  const form = `<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:8px">
+    <select id="thMonths_${id}" style="width:auto;font-size:12px">
+      ${[3, 6, 12, 24].map(n => `<option value="${n}" ${n === 6 ? 'selected' : ''}>${esc(tf('op_months', {n}))}</option>`).join('')}
+    </select>
+    <button class="secondary" type="button" style="font-size:12px" onclick="waterThermalFetch(${id}, this)">
+      ${esc(t(d.has_data ? 'th_fetch_again' : 'th_fetch'))}</button>
+    <span class="hint">${esc(t('th_cost'))}</span></div>
+    <div id="thOut_${id}" style="margin-top:6px"></div>`;
+  const small = d.small_field ? `<div style="color:#A87716;margin-top:4px">${esc(tf('th_small', {ha: d.area_ha}))}</div>` : '';
+  let body = '';
+  if(!d.has_data){
+    body = `<div class="hint">${esc(t('th_intro'))}</div>${small}${form}`;
+  } else {
+    const L = d.latest;
+    const spread = (L.t_p90 != null && L.t_p10 != null) ? (L.t_p90 - L.t_p10) : null;
+    const tsiTxt = L.tsi != null
+      ? `<b style="color:${thermalTsiColor(L.tsi)}">TSI = ${L.tsi.toFixed(2)}</b> · ${esc(t(L.tsi < 0.25 ? 'th_cls_ok' : L.tsi < 0.5 ? 'th_cls_mid' : 'th_cls_high'))}`
+      : `<span class="hint">${esc(t('th_no_ref'))}</span>`;
+    body = `<div style="font-size:13px">${tsiTxt}</div>
+      <div style="margin-top:4px">${esc(tf('th_latest', {d: L.scene_date, t: L.t_field.toFixed(1),
+          c: L.t_cold != null ? L.t_cold.toFixed(1) : '—', h: L.t_hot != null ? L.t_hot.toFixed(1) : '—', n: L.ndvi.toFixed(2)}))}</div>
+      ${spread != null && L.ndvi >= 0.4 && spread >= 3 ? `<div style="color:#A87716;margin-top:2px">${esc(tf('th_spread', {k: spread.toFixed(1)}))}</div>` : ''}
+      ${L.ndvi < 0.3 ? `<div class="hint">${esc(t('th_low_cover'))}</div>` : ''}
+      ${small}
+      <div class="hint" style="margin-top:4px">${esc(tf('th_n', {n: d.series.length}))}</div>
+      <div style="height:230px;margin-top:6px"><canvas id="thChart_${id}"></canvas></div>
+      <div style="display:flex;gap:6px;margin-top:6px">
+        <button class="secondary" type="button" style="font-size:12px" onclick="waterThermalDelete(${id})">${esc(t('th_delete'))}</button>
+      </div>
+      ${form}
+      <details style="margin-top:6px"><summary class="hint" style="cursor:pointer">${esc(t('op_how'))}</summary>
+        <div class="hint" style="margin-top:4px">${esc(t('th_intro'))}</div>
+        <div class="hint" style="margin-top:4px">${esc(t('th_caveats'))}</div></details>`;
+  }
+  el.innerHTML = `<div style="margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:10px;font-size:12px">
+    <div style="font-weight:600;margin-bottom:4px">${esc(t('th_title'))}</div>${body}
+    <div class="hint" style="margin-top:4px">${esc(trServer(d.calibration_status || ''))} · ${esc(t('th_source'))}</div></div>`;
+  if(d.has_data) drawThermalChart(id, d.series);
+}
+
+function drawThermalChart(id, series){
+  const cv = document.getElementById(`thChart_${id}`);
+  if(!cv) return;
+  const lab = series.map(s => s.scene_date);
+  thermalCharts[id] = new Chart(cv, {
+    type: 'line',
+    data: {labels: lab, datasets: [
+      {label: t('th_tsi'), data: series.map(s => s.tsi), yAxisID: 'y', borderColor: '#B3261E', backgroundColor: '#B3261E',
+       pointRadius: 3, borderWidth: 2, spanGaps: true, tension: 0.2},
+      {label: t('th_t_field'), data: series.map(s => s.t_field), yAxisID: 'y2', borderColor: '#E39B2B', pointRadius: 2, borderWidth: 1.5, tension: 0.2},
+      {label: t('th_t_cold'), data: series.map(s => s.t_cold), yAxisID: 'y2', borderColor: '#1E6FB0', borderDash: [4, 3], pointRadius: 0, borderWidth: 1.2, spanGaps: true},
+      {label: t('th_t_hot'), data: series.map(s => s.t_hot), yAxisID: 'y2', borderColor: '#8A6D3B', borderDash: [4, 3], pointRadius: 0, borderWidth: 1.2, spanGaps: true},
+    ]},
+    options: {responsive: true, maintainAspectRatio: false, animation: false,
+      plugins: {legend: {labels: {boxWidth: 10, font: {size: 10}}}},
+      scales: {x: {ticks: {maxTicksLimit: 6, font: {size: 9}}},
+               y: {min: 0, max: 1, title: {display: true, text: 'TSI'}},
+               y2: {position: 'right', grid: {drawOnChartArea: false}, title: {display: true, text: '°C'}}}}
+  });
+}
+
+async function waterThermalFetch(id, btn){
+  const months = parseInt(document.getElementById(`thMonths_${id}`).value, 10);
+  btn.disabled = true; const orig = btn.textContent; btn.textContent = t('op_calibrating');
+  try{
+    const r = await fetch(`/api/water/field/${id}/thermal/fetch`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({months})});
+    const d = await r.json();
+    if(!r.ok) throw new Error(trServer(String(d.detail || r.status)));
+    renderThermal(id, d);
+  }catch(e){
+    const out = document.getElementById(`thOut_${id}`);
+    if(out) out.innerHTML = `<span style="color:#B3261E">${esc(t('cs_error'))}: ${esc(e.message)}</span>`;
+  }finally{ btn.disabled = false; btn.textContent = orig; }
+}
+
+async function waterThermalDelete(id){
+  if(!confirm(t('th_delete_confirm'))) return;
+  await fetch(`/api/water/field/${id}/thermal`, {method:'DELETE'});
+  const el = document.getElementById(`waterThermal_${id}`); el.dataset.open = '';
+  waterThermalToggle(id);
 }
 
 /* --- Bilans wodny FAO-56 (water_balance.py) — sugestia, nie automat. --- */
@@ -4532,6 +5111,7 @@ async function waterReplay(fieldId, btn){
     const r = await fetch(`/api/water/field/${fieldId}/replay?with_balance=true`);
     const data = await r.json();
     if(!r.ok) throw new Error(data.detail || (t('w_err')+' '+r.status));
+    if(waterChartObs[fieldId]) drawWaterHistoryChart(fieldId, waterChartObs[fieldId], [], data);
     const s = data.summary || {};
     const rr = await fetch(`/api/water/replay_ratings?water_field_id=${fieldId}`);
     const ratings = rr.ok ? await rr.json() : [];
@@ -4817,9 +5397,15 @@ async function loadWaterDetails(fieldId){
     const plans = await planR.json();
     const rain = rainR.ok ? await rainR.json() : [];
     const alarms = alarmR.ok ? (await alarmR.json()).filter(a => a.water_field_id === fieldId) : [];
+    let replay = null;
+    try{
+      const repR = await fetch(`/api/water/field/${fieldId}/replay?with_balance=true`);
+      if(repR.ok) replay = await repR.json();
+    }catch(e){ /* wykres zostaje bez pasm, gdy pogoda lub powtórka nie dojdzie */ }
+    waterChartObs[fieldId] = observations;
     destroyWaterChart(fieldId);
     el.innerHTML = renderWaterDetails(fieldId, events, observations, plans) + renderRainGauge(fieldId, rain);
-    drawWaterHistoryChart(fieldId, observations, alarms);
+    drawWaterHistoryChart(fieldId, observations, alarms, replay);
   }catch(e){
     el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
   }
@@ -4971,9 +5557,11 @@ function renderWaterTriageItem(a){
       <div class="hint" style="margin-top:2px">${esc(trServer(a.calibration_status || ''))}</div>
     </div>
     <div style="font-size:12.5px">${esc(trServer(a.message || ''))}</div>
-    <div style="display:flex;gap:6px;flex-wrap:wrap">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
       <button class="secondary" style="font-size:11px" type="button"
         onclick="waterTriage(${a.id},'confirmed')">${esc(t('w_confirm'))}</button>
+      ${a.has_farmer_phone ? `<label style="font-size:11.5px;display:flex;gap:4px;align-items:center;margin-right:6px">
+        <input type="checkbox" id="wtSms${a.id}" checked> ${esc(t('fm_sms_on_confirm'))}</label>` : ''}
       <button class="secondary" style="font-size:11px" type="button"
         onclick="waterTriage(${a.id},'needs_visit')">${esc(t('w_visit'))}</button>
       <button class="secondary" style="font-size:11px" type="button"
@@ -5000,12 +5588,177 @@ async function loadWaterTriageQueue(){
 
 async function waterTriage(alarmId, status){
   let note = null;
+  const smsBox = document.getElementById('wtSms' + alarmId);
+  const notify = status === 'confirmed' && !!(smsBox && smsBox.checked);
   if(status !== 'confirmed') note = prompt(t('w_note_prompt')) || null;
-  await fetch(`/api/water/alarm/${alarmId}/triage`, {method:'POST',
+  else if(notify){
+    note = prompt(t('fm_note_for_farmer'));
+    if(note === null) return;           // Anuluj = nic nie zmieniamy
+    note = note.trim() || null;
+  }
+  const r = await fetch(`/api/water/alarm/${alarmId}/triage`, {method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({triage_status: status, triage_note: note, triage_by: 'operator'})});
+    body: JSON.stringify({triage_status: status, triage_note: note, triage_by: 'operator',
+                          notify_farmer: notify})});
+  const msg = document.getElementById('waterTriageMsg');
+  if(msg){
+    msg.textContent = '';
+    if(notify && r.ok){
+      const d = await r.json();
+      if(d.sms) msg.innerHTML = fmSmsResult(d.sms);
+    }
+  }
   loadWaterTriageQueue();
   if(waterMap) loadWaterFieldList(); // odswieza tez kolory na mapie
+  if(notify) loadFarmers();
+}
+
+/* ===== Rolnicy i SMS (farmer_panel.py) ===== */
+function fmStatusLabel(st){ return t('fm_st_' + st) || st; }
+function fmSmsResult(sms){
+  const ok = sms.status === 'sent';
+  const color = ok ? '#2F7A46' : (sms.status === 'not_configured' ? '#7C6A2A' : '#8B2E1F');
+  let h = `<span style="color:${color};font-weight:600">SMS: ${esc(fmStatusLabel(sms.status))}</span>`;
+  if(sms.text) h += ` <span class="hint">— ${esc(sms.text)}</span>`;
+  return h;
+}
+
+let FM_STATUS = null;
+/* Czasy z SQLite (datetime('now')) są w UTC — pokazujemy lokalne. */
+function fmTime(s){
+  if(!s) return '';
+  const d = new Date(s.replace(' ', 'T') + 'Z');
+  if(isNaN(d)) return s.slice(0,16);
+  const p = n => String(n).padStart(2,'0');
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+async function loadFarmers(){
+  const el = document.getElementById('fmList');
+  if(!el) return;
+  try{
+    const [fr, st] = await Promise.all([fetch('/api/farmers'), fetch('/api/farmers/sms_status')]);
+    const farmers = await fr.json();
+    FM_STATUS = await st.json();
+    const warn = [];
+    warn.push(FM_STATUS.provider
+      ? `${esc(t('fm_gateway'))}: <b>${esc(FM_STATUS.provider === 'twilio' ? 'Twilio' : 'SMSAPI.pl')}</b>`
+      : `<span style="color:#7C6A2A">${esc(t('fm_no_gateway'))}</span>`);
+    if(!FM_STATUS.app_base_url) warn.push(`<span style="color:#8B2E1F">${esc(t('fm_no_base_url'))}</span>`);
+    document.getElementById('fmStatus').innerHTML = warn.join(' · ');
+    if(!farmers.length){
+      el.innerHTML = `<p class="empty-hint" style="padding:12px 0">${esc(t('fm_empty'))}</p>`;
+    } else {
+      el.innerHTML = farmers.map(renderFarmer).join('');
+    }
+  }catch(e){
+    el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
+  }
+  loadFarmerOutbox();
+}
+
+function renderFarmer(f){
+  const langs = ['pl','en','ru','uz'].map(l => `<option value="${l}" ${f.lang===l?'selected':''}>${l.toUpperCase()}</option>`).join('');
+  const fields = f.fields.map(x => {
+    const sug = x.irrigation_mode === 'irrigation'
+      ? ` <button class="secondary" type="button" style="font-size:10.5px;padding:2px 6px" title="${esc(t('fm_suggest_title'))}"
+           onclick="fmSuggest(${x.id}, this)">${esc(t('fm_suggest'))}</button>` : '';
+    return `<span style="display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:6px;padding:2px 6px;margin:2px 4px 2px 0;font-size:11.5px">
+      ${x.irrigation_mode === 'irrigation' ? '💧' : '🌦'} ${esc(x.parcel_id)}${sug}</span>`;
+  }).join('') || `<span class="hint">${esc(t('fm_no_fields'))}</span>`;
+  const ack = f.last_ack ? `<div class="hint" style="margin-top:4px">${esc(t('fm_last_ack'))}: <b>${esc(t('fm_ack_' + f.last_ack.ack))}</b>
+      (${esc(f.last_ack.parcel_id || '')}, ${esc(fmTime(f.last_ack.at))})${f.last_ack.note ? ' — „' + esc(f.last_ack.note) + '”' : ''}</div>` : '';
+  const seen = f.last_seen_at ? `${esc(t('fm_seen'))}: ${esc(fmTime(f.last_seen_at))}` : esc(t('fm_never_seen'));
+  return `<div style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px">
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
+      <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center">
+        <input type="text" value="${esc(f.name || '')}" placeholder="${esc(t('fm_name_ph'))}" style="width:auto;min-width:140px;font-size:13px"
+          onchange="fmPatch(${f.id}, {name: this.value})">
+        <span style="font-size:13px;font-family:monospace">${esc(f.phone_display)}</span>
+        <select style="width:auto;font-size:12px" onchange="fmPatch(${f.id}, {lang: this.value})" title="${esc(t('fm_lang'))}">${langs}</select>
+      </div>
+      <div class="hint">${seen}</div>
+    </div>
+    <div style="margin-top:6px">${fields}</div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-top:6px;font-size:12px">
+      <label style="display:flex;gap:4px;align-items:center"><input type="checkbox" ${f.sms_opt_in ? 'checked' : ''}
+        onchange="fmPatch(${f.id}, {sms_opt_in: this.checked})"> ${esc(t('fm_opt_in'))}</label>
+      <label style="display:flex;gap:4px;align-items:center" title="${esc(t('fm_auto_title'))}"><input type="checkbox" ${f.auto_suggestions ? 'checked' : ''}
+        onchange="fmPatch(${f.id}, {auto_suggestions: this.checked})"> ${esc(t('fm_auto'))}</label>
+    </div>
+    ${ack}
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:8px">
+      ${f.link ? `<a class="secondary" href="${esc(f.link.startsWith('http') ? f.link : location.origin + f.link)}" target="_blank" rel="noopener"
+         style="font-size:11.5px;padding:5px 9px;border:1px solid var(--line);border-radius:7px;text-decoration:none;color:inherit">${esc(t('fm_open'))}</a>` : ''}
+      <button class="secondary" type="button" style="font-size:11.5px" onclick="fmCopyLink('${esc(f.link || '')}', this)">${esc(t('fm_copy'))}</button>
+      <button class="secondary" type="button" style="font-size:11.5px" onclick="fmSendLink(${f.id}, this)">${esc(t('fm_send_link'))}</button>
+      <button class="secondary" type="button" style="font-size:11.5px" onclick="fmNewLink(${f.id})">${esc(t('fm_new_link'))}</button>
+    </div>
+    <div id="fmOut${f.id}" style="font-size:12px;margin-top:6px"></div>
+  </div>`;
+}
+
+async function fmPatch(id, body){
+  await fetch(`/api/farmers/${id}`, {method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  loadFarmers();
+}
+
+function fmFullLink(link){ return link.startsWith('http') ? link : location.origin + link; }
+
+async function fmCopyLink(link, btn){
+  if(!link) return;
+  try{ await navigator.clipboard.writeText(fmFullLink(link)); btn.textContent = '✓ ' + t('fm_copied'); }
+  catch(e){ prompt(t('fm_copy'), fmFullLink(link)); }
+}
+
+async function fmSendLink(id, btn){
+  btn.disabled = true;
+  const r = await fetch(`/api/farmers/${id}/send_link`, {method:'POST'});
+  btn.disabled = false;
+  const out = document.getElementById('fmOut' + id);
+  out.innerHTML = r.ok ? fmSmsResult(await r.json()) : esc(t('cs_error'));
+  loadFarmerOutbox();
+}
+
+async function fmNewLink(id){
+  if(!confirm(t('fm_new_link_confirm'))) return;
+  await fetch(`/api/farmers/${id}/new_link`, {method:'POST'});
+  loadFarmers();
+}
+
+async function fmSuggest(fieldId, btn){
+  btn.disabled = true;
+  const r = await fetch(`/api/farmers/field/${fieldId}/suggest`, {method:'POST'});
+  btn.disabled = false;
+  const box = btn.closest('div[style*="border-radius:10px"]');
+  const out = box ? box.querySelector('[id^="fmOut"]') : null;
+  let html;
+  if(r.ok) html = fmSmsResult(await r.json());
+  else { let d = ''; try{ d = (await r.json()).detail; }catch(e){} html = `<span style="color:#8B2E1F">${esc(trServer(d || t('cs_error')))}</span>`; }
+  if(out) out.innerHTML = html;
+  loadFarmerOutbox();
+}
+
+async function loadFarmerOutbox(){
+  const el = document.getElementById('fmOutbox');
+  if(!el) return;
+  try{
+    const rows = await (await fetch('/api/farmers/outbox?limit=20')).json();
+    if(!rows.length){ el.innerHTML = `<p class="hint">${esc(t('fm_outbox_empty'))}</p>`; return; }
+    el.innerHTML = rows.map(r => {
+      const ok = r.status === 'sent';
+      const col = ok ? '#2F7A46' : (r.status === 'not_configured' ? '#7C6A2A' : '#8B2E1F');
+      return `<div style="border-bottom:1px dashed var(--line);padding:6px 0;font-size:12px">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap">
+          <span>${esc(fmTime(r.created_at))} · ${esc(r.phone_display)} · ${esc(t('fm_kind_' + r.kind) || r.kind)}</span>
+          <span style="color:${col};font-weight:600">${esc(fmStatusLabel(r.status))}${r.segments > 1 ? ` · ${r.segments} SMS` : ''}</span>
+        </div>
+        <div style="color:var(--muted);margin-top:2px;word-break:break-word">${esc(r.text)}</div>
+      </div>`;
+    }).join('');
+  }catch(e){
+    el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
+  }
 }
 </script>
 
@@ -5788,7 +6541,7 @@ const EXTRA_I18N = {
     w_gen_sq: 'Wygeneruj kwadrat', w_phone: 'Tel. rolnika', w_name: 'Imię/nazwisko', w_notes: 'Notatki',
     w_add_btn: 'Dodaj pole', w_add_ok: '✅ Pole dodane do modułu wodnego',
     w_triage_h: 'Kolejka do przeglądu (doradca)',
-    w_triage_hint: 'Alerty z silnika anomalii trafiają tu jako pierwsze — dopiero potwierdzony alert ma trafić do panelu rolnika. Każdy wynik jest niekalibrowany i wymaga potwierdzenia w terenie.',
+    w_triage_hint: 'Alerty z silnika anomalii trafiają tu jako pierwsze — dopiero potwierdzony alert trafia do panelu rolnika (i SMS-em, jeśli zaznaczysz). Każdy wynik jest niekalibrowany i wymaga potwierdzenia w terenie.',
     w_loading: 'Ładowanie...', w_map_h: 'Mapa pól ze statusem',
     w_map_legend: '🟢 brak anomalii / nigdy nie flagowano  ·  🟠 anomalia czeka na przegląd doradcy  ·  🔴 potwierdzona w terenie',
     w_plan_h: 'Kalendarz nawadniania — najbliższe wpisy',
@@ -5830,7 +6583,7 @@ const EXTRA_I18N = {
     w_import_done: 'Dodano: {a}, pominięto (już w module): {s}, błędy: {e}.',
     wm_title: 'Zaznacz pole na mapie', wm_search_ph: 'Szukaj: miejscowość, adres, współrzędne (51.10, 17.03) lub nr działki',
     wm_search_btn: 'Szukaj', wm_mode_polygon: 'Obrys pola', wm_mode_parcel: 'Gotowe obrysy', wm_mode_pin: 'Pinezka',
-    wm_undo: 'Cofnij', wm_clear: 'Wyczyść', wm_cancel: 'Anuluj', wm_src_auto: 'PL: działki ewidencyjne · poza PL: pola z satelity', wm_src_ftw: 'Pola z satelity (FTW) — także w PL', wm_ftw_tip: 'Pole z satelity (FTW {year}), pewność {conf}%, {ha} ha', wm_use: 'Użyj', wm_layer_sat: 'Satelita',
+    wm_undo: 'Cofnij', wm_clear: 'Wyczyść', wm_cancel: 'Anuluj', wm_src_auto: 'PL: działki ewidencyjne · poza PL: pola z satelity', wm_src_ftw: 'Pola z satelity (FTW) — także w PL', wm_ftw_tip: 'Pole z satelity (FTW {year}), pewność {conf}%, {ha} ha', wm_use: 'Użyj', wm_layer_sat: 'Satelita', wm_labels: 'Nazwy i drogi',
     wm_info_polygon: 'Klikaj kolejne narożniki pola (punktów: {n}, potrzeba min. 3). Punkty można przeciągać; Ctrl+Z cofa.',
     wm_info_polygon_ok: 'Obrys: {n} punktów, ok. {ha} ha. Dodaj kolejne narożniki albo kliknij „Użyj”.',
     wm_info_parcel: 'Kliknij w pole — w Polsce pobierze się działka z ULDK, w Azji Środkowej pole z mapy satelitarnej Fields of The World (do kilku sekund). Kilka kliknięć = pole z kilku części; ponowne kliknięcie usuwa część. Obrys FTW to wynik modelu — sprawdź go na zdjęciu.',
@@ -5851,7 +6604,7 @@ const EXTRA_I18N = {
     w_bal_lowconf: 'Niska pewność: w oknie nie było większego opadu ani nawodnienia — stan początkowy profilu jest założony.',
     w_bal_plan_note: 'Termin zasugerowany przez bilans wodny (FAO-56).', w_risk_uni_irr: 'Nierównomierne nawodnienie pola', w_risk_uni: 'Nierównomierna wilgotność w polu', w_risk_stress: 'Możliwy stres wodny', w_no_anomaly: 'Brak sygnału anomalii.',
     w_confirm_del: 'Dezaktywować to pole w module wodnym?', w_ndwi_h: 'NDMI — historia obserwacji',
-    w_chart_alarm: 'Alarm',
+    w_chart_alarm: 'Alarm', w_chart_stress: 'Stres wodny', w_chart_warn: 'Ostrzeżenie',
     w_th_date: 'data', w_th_precip: 'opady (mm)', w_no_obs: 'brak obserwacji', w_log_h: 'Log nawodnienia',
     w_m_drip: 'kroplowe', w_m_flood: 'zalewowe', w_m_sprinkle: 'deszczowanie',
     w_ph_amount: 'ilość / czas trwania', w_ph_unit: 'jednostka (mm, m³/ha, godz...)', w_add_entry: '+ Dodaj wpis',
@@ -5865,6 +6618,10 @@ const EXTRA_I18N = {
     w_err_save: 'Błąd zapisu', w_prompt_skip: 'Powód pominięcia (opcjonalnie):',
     w_field_n: 'pole #{n}', w_done: '✓ Wykonano', w_skip: 'Pomiń', w_no_upcoming: 'Brak zaplanowanych nawodnień.',
     w_triage_empty: 'Kolejka pusta — brak alertów czekających na przegląd.',
+    fm_h: "Rolnicy: panel i SMS", fm_hint: "Każdy rolnik (numer telefonu przy polu) ma własną stronę z linku: stan wody w glebie, sugestia nawodnienia, potwierdzone przez Ciebie alerty z możliwością odpowiedzi oraz zapis nawodnień i deszczomierza. SMS idzie tylko po potwierdzeniu alertu albo na Twoje polecenie — chyba że włączysz rolnikowi automatyczne sugestie.", fm_sms_on_confirm: "SMS do rolnika", fm_note_for_farmer: "Uwaga dla rolnika — zobaczy ją w swoim panelu (opcjonalnie):", fm_gateway: "Bramka SMS", fm_no_gateway: "Brak bramki SMS (SMSAPI_TOKEN albo TWILIO_*) — wiadomości trafiają tylko do skrzynki, można je przekazać ręcznie.", fm_no_base_url: "Nie ustawiono APP_BASE_URL — linki w SMS-ach nie zadziałają. Ustaw publiczny adres aplikacji w .env.", fm_empty: "Brak rolników — wpisz numer telefonu przy polu w module wodnym.", fm_no_fields: "brak aktywnych pól", fm_suggest: "SMS z sugestią", fm_suggest_title: "Wyślij teraz SMS z sugestią nawodnienia z modelu bilansu", fm_last_ack: "Ostatnia odpowiedź", fm_seen: "Ostatnio w panelu", fm_never_seen: "jeszcze nie otwierał panelu", fm_name_ph: "imię i nazwisko", fm_lang: "Język panelu i SMS", fm_opt_in: "Zgoda na SMS", fm_auto: "Automatyczne sugestie nawodnienia", fm_auto_title: "Codziennie rano: SMS, gdy model przewiduje stres w ciągu 2 dni (najwyżej raz na 3 dni na pole, nie po świeżym nawodnieniu). Pomija Twoją weryfikację — włącz tylko zaufanym polom.", fm_open: "Otwórz panel", fm_copy: "Kopiuj link", fm_copied: "skopiowano", fm_send_link: "Wyślij link SMS", fm_new_link: "Nowy link", fm_new_link_confirm: "Wygenerować nowy link? Stary przestanie działać.", fm_outbox_h: "Skrzynka SMS (ostatnie 20)", fm_outbox_empty: "Nie wysłano jeszcze żadnego SMS-a.", fm_st_sent: "wysłany", fm_st_failed: "błąd bramki", fm_st_not_configured: "nie wysłany — brak bramki SMS", fm_st_opted_out: "rolnik nie zgodził się na SMS", fm_st_rate_limited: "dzienny limit SMS wyczerpany", fm_st_no_phone: "brak numeru telefonu przy polu", fm_kind_alert: "alert", fm_kind_suggestion: "sugestia", fm_kind_auto_suggestion: "sugestia automatyczna", fm_kind_panel_link: "link do panelu", fm_ack_seen: "przeczytał", fm_ack_will_irrigate: "nawodni", fm_ack_irrigated: "już nawodnił", fm_ack_disagree: "nie zgadza się",
+    op_btn: "Wilgotność (OPTRAM)", op_title: "Wilgotność wierzchniej warstwy gleby z satelity (OPTRAM)", op_intro: "OPTRAM ocenia wilgotność z tego, jak ciemna jest gleba i roślinność w krótkofalowej podczerwieni (Sentinel-2, pasmo B12): woda pochłania to światło. Piksele z regionu wokół pola z wielu dat tworzą na wykresie NDVI × STR trapez — dolna krawędź to stan najsuchszy, górna najwilgotniejszy przy danym pokryciu roślin. Położenie pola między krawędziami daje wilgotność względną W od 0 (sucho) do 1 (mokro).", op_caveats: "W jest względne, nie w % objętości. Dotyczy kilku górnych centymetrów, a przy zwartym łanie (NDVI > 0,6) raczej uwodnienia roślin. Trapez jest liczony dla regionu ~1,5 km wokół pola — po zmianie sezonu albo dużej zmianie upraw w okolicy warto skalibrować ponownie. To kontekst do werdyktu i bilansu wodnego, nie osobny alarm.", op_months: "ostatnie {n} mies.", op_calibrate: "Skalibruj trapez", op_recalibrate: "Kalibruj ponownie", op_calibrating: "Liczę… (do 2 min)", op_calib_cost: "jedno zapytanie Process API (do 60 scen) + jedno Statistical API", op_no_series: "Brak czystych obserwacji pola w okresie kalibracji.", op_pct: "{p}. percentyl wartości pola", op_cls_dry: "sucho", op_cls_mid: "umiarkowanie wilgotno", op_cls_wet: "wilgotno", op_dense: "Zwarty łan — wartość pokazuje raczej uwodnienie roślin niż gleby.", op_quality: "Jakość kalibracji", op_q_good: "dobra", op_q_limited: "ograniczona", op_q_poor: "niewiarygodna", op_calib_info: "okres {from} – {to}, {s} scen, {px} pikseli", op_era5: "Zgodność z wilgotnością gleby ERA5-Land 0–7 cm: r = {r} ({n} wspólnych dat).", op_era5_good: "— dobra, kalibracja wiarygodna.", op_era5_mid: "— umiarkowana.", op_era5_bad: "— słaba, traktuj W ostrożnie.", op_era5_none: "Za mało wspólnych dat z ERA5-Land do porównania (uruchom „Sprawdź teraz” albo powtórkę na historii).", op_chart_trap: "Trapez: piksele regionu, krawędzie sucha i mokra, pole (pomarańczowe)", op_chart_series: "Wilgotność W pola w czasie i ERA5-Land 0–7 cm", op_pixels: "piksele regionu", op_edge_dry: "krawędź sucha", op_edge_wet: "krawędź mokra", op_field: "pole", op_era5_label: "ERA5-Land 0–7 cm", op_refresh: "Dociągnij ostatnie 45 dni", op_delete: "Usuń kalibrację", op_delete_confirm: "Usunąć kalibrację OPTRAM i serię wilgotności tego pola?", op_how: "Jak to działa i ograniczenia",
+    th_btn: "Termika (Landsat)", th_title: "Termika z Landsata 8/9 — stres wodny po temperaturze łanu", th_intro: "Roślina z dostępem do wody chłodzi się transpiracją; gdy wody brakuje, zamyka aparaty szparkowe i nagrzewa się — często kilka dni przed spadkiem NDVI/NDMI. Porównujemy temperaturę pola z najchłodniejszą gęstą roślinnością (dobrze uwodnioną) i najgorętszą gołą glebą w promieniu ~1,5 km na tej samej scenie. Indeks stresu termicznego TSI: 0 = pole tak chłodne jak najlepiej uwodniona roślinność, 1 = nagrzane jak sucha gleba.", th_caveats: "Copernicus Data Space udostępnia Landsata tylko w poziomie 1 (od 2021): temperatura powierzchni jest liczona w przybliżeniu (emisyjność z NDVI, bez korekcji atmosfery), więc stopnie °C traktuj orientacyjnie — wskaźnik TSI jest względny w obrębie sceny i na to niewrażliwy. Piksel termiczny ma 100 m: na polach poniżej ~3 ha wynik miesza się z otoczeniem. Nalot ok. 10:30–11:00, co ~8 dni (L8+L9), tylko bezchmurnie. Zimą i wczesną wiosną brak gęstej roślinności w okolicy = brak TSI.", th_fetch: "Pobierz termikę", th_fetch_again: "Pobierz ponownie", th_cost: "jedno zapytanie Process API (do 60 scen)", th_small: "Pole ma {ha} ha — piksel termiczny Landsata ma 100 m, wynik będzie mieszał się z otoczeniem.", th_cls_ok: "rośliny chłodzą się transpiracją", th_cls_mid: "możliwy początek stresu", th_cls_high: "prawdopodobny stres wodny albo słaba okrywa", th_no_ref: "Brak gęstej roślinności albo gołej gleby w okolicy na tej scenie — nie da się policzyć TSI.", th_latest: "Scena {d}: pole ≈ {t} °C · najchłodniejsza roślinność ≈ {c} °C · najgorętsza gleba ≈ {h} °C · NDVI pola {n}", th_spread: "Różnica temperatur w polu (p90−p10): {k} K — możliwe nierówne nawodnienie.", th_low_cover: "Słaba okrywa — temperatura pokazuje głównie glebę.", th_n: "Scen bez chmur nad polem: {n}", th_tsi: "TSI (stres termiczny)", th_t_field: "pole °C", th_t_cold: "roślinność chłodna °C", th_t_hot: "gleba gorąca °C", th_delete: "Usuń dane termiczne", th_delete_confirm: "Usunąć zapisane sceny termiczne tego pola?", th_source: "Landsat 8/9 (USGS/NASA) przez Copernicus Data Space",
+    bc_h: "Biomasa i azot poplonu — kalibracja na próbkach z pola (CIred-edge)", bc_intro: "Obecny model biomasy pochodzi z literatury dla kukurydzy. CIred-edge (B07/B05 − 1) rośnie liniowo z chlorofilem i azotem w łanie i nie nasyca się przy bujnym poplonie — ale współczynników dla polskich mieszanek nie ma w literaturze. Wpisuj próbki z wizyt (ramki, ścięcie, ważenie): aplikacja dobierze najbliższą czystą scenę Sentinel-2, porówna modele i pozwoli zatwierdzić model na Twoich danych.", bc_proto_h: "Jak pobrać próbkę", bc_proto_1: "Termin: do 5 dni od bezchmurnego przelotu Sentinel-2 (najlepiej w dniu przelotu). Aplikacja sama znajdzie najbliższą czystą scenę.", bc_proto_2: "Na polu 4 ramki 0,25 m² (50×50 cm) w miejscach typowych dla pola, min. 20 m od brzegu; nie wybieraj najlepszych ani najgorszych miejsc.", bc_proto_3: "Ściąć całą biomasę nadziemną tuż przy ziemi, zważyć świeżą masę z każdej ramki (średnia w gramach).", bc_proto_4: "Sucha masa: wysuszyć podpróbkę w 60–65 °C do stałej masy (ok. 48 h) albo przyjąć % suchej masy z tabel dla gatunku; N — z analizy laboratoryjnej (% N w s.m.), opcjonalnie.", bc_proto_5: "Zbierz próbki z pól o różnej bujności — od słabych po bardzo bujne. Model można zatwierdzić od 8 próbek, wiarygodny jest od ok. 15.", bc_f_parcel: "Nr działki (ULDK)", bc_f_date: "Data próbki", bc_f_mix: "Mieszanka / gatunek", bc_f_frames: "Liczba ramek", bc_f_frame_m2: "Powierzchnia ramki (m²)", bc_f_fresh: "Świeża masa — średnio z ramki (g)", bc_f_dmpct: "Sucha masa (% świeżej)", bc_f_dm: "albo od razu: sucha masa (t/ha)", bc_f_npct: "N w suchej masie (%, opcjonalnie)", bc_add: "Dodaj próbkę", bc_calc: "= {dm} t s.m./ha", bc_calc_n: "{n} kg N/ha", bc_missing: "Podaj nr działki, datę i masę (świeżą z % s.m. albo suchą t/ha).", bc_matching: "Szukam sceny Sentinel-2…", bc_added_ok: "Dodano. Scena {d}, CIre {c}.", bc_added_nomatch: "Dodano, ale bez czystej sceny w ±5 dniach — próbka nie wejdzie do dopasowania (spróbuj „Dopasuj scenę” później).", bc_empty: "Brak próbek.", bc_col_parcel: "Działka", bc_col_dm: "Sucha masa t/ha", bc_col_scene: "Scena S2", bc_rematch: "Dopasuj scenę", bc_rematch_fail: "błąd — spróbuj później", bc_delete_confirm: "Usunąć tę próbkę?", bc_active: "Model używany teraz:", bc_target_dm: "biomasa", bc_target_n: "pobranie N", bc_lit_model: "literaturowy (EVI+NDRE+RVI, kukurydza)", bc_clear: "Wróć do literaturowego", bc_clear_confirm: "Wycofać model skalibrowany? Szacunki wrócą do modelu literaturowego.", bc_fit_h: "Dopasowanie na {n} próbkach z dopasowaną sceną", bc_col_model: "Model", bc_rmse_cv: "błąd walidacji krzyżowej", bc_linear: "liniowy", bc_cmp_hint: "Błąd walidacji krzyżowej: każdą próbkę przewiduje model dopasowany do pozostałych — uczciwa miara błędu na nowym polu. Mniej = lepiej.", bc_apply_dm: "Zatwierdź model biomasy", bc_apply_n: "Zatwierdź model azotu", bc_apply_dm_confirm: "Zatwierdzić model biomasy z CIre? Od teraz szacunki biomasy (także zapisane w monitoringu) będą liczone z tego modelu.", bc_apply_n_confirm: "Zatwierdzić model pobrania N z CIre?", bc_applied: "Zatwierdzono. Przeliczono zapisanych obserwacji: {n}.", bc_samples: "próbki", bc_fit_line: "dopasowanie", bc_n_line: "N w biomasie: {lo}–{hi} kg/ha", bc_src_field: "model skalibrowany na próbkach z pola", bc_src_lit: "model literaturowy (bez kalibracji na poplonach)", bc_extrap: "CIre poza zakresem próbek — ekstrapolacja",
     w_confirm: 'Potwierdź', w_visit: 'Wymaga wizyty', w_reject: 'Odrzuć', w_note_prompt: 'Notatka (opcjonalnie):',
   },
   en: {
@@ -5955,7 +6712,7 @@ const EXTRA_I18N = {
     w_gen_sq: 'Generate square', w_phone: 'Farmer phone', w_name: 'Name', w_notes: 'Notes',
     w_add_btn: 'Add field', w_add_ok: '✅ Field added to the water module',
     w_triage_h: 'Review queue (advisor)',
-    w_triage_hint: 'Anomaly-engine alerts land here first — only a confirmed alert should reach the farmer panel. Every result is uncalibrated and needs confirmation in the field.',
+    w_triage_hint: 'Anomaly-engine alerts land here first — only a confirmed alert reaches the farmer panel (and SMS, if ticked). Every result is uncalibrated and needs confirmation in the field.',
     w_loading: 'Loading...', w_map_h: 'Field map with status',
     w_map_legend: '🟢 no anomaly / never flagged  ·  🟠 anomaly waiting for advisor review  ·  🔴 confirmed in the field',
     w_plan_h: 'Irrigation calendar — upcoming entries',
@@ -5997,7 +6754,7 @@ const EXTRA_I18N = {
     w_import_done: 'Added: {a}, skipped (already in the module): {s}, errors: {e}.',
     wm_title: 'Mark the field on the map', wm_search_ph: 'Search: place, address, coordinates (51.10, 17.03) or parcel number',
     wm_search_btn: 'Search', wm_mode_polygon: 'Field outline', wm_mode_parcel: 'Ready outlines', wm_mode_pin: 'Pin',
-    wm_undo: 'Undo', wm_clear: 'Clear', wm_cancel: 'Cancel', wm_src_auto: 'PL: cadastral parcels · outside PL: satellite fields', wm_src_ftw: 'Satellite fields (FTW) — also in PL', wm_ftw_tip: 'Satellite field (FTW {year}), confidence {conf}%, {ha} ha', wm_use: 'Use', wm_layer_sat: 'Satellite',
+    wm_undo: 'Undo', wm_clear: 'Clear', wm_cancel: 'Cancel', wm_src_auto: 'PL: cadastral parcels · outside PL: satellite fields', wm_src_ftw: 'Satellite fields (FTW) — also in PL', wm_ftw_tip: 'Satellite field (FTW {year}), confidence {conf}%, {ha} ha', wm_use: 'Use', wm_layer_sat: 'Satellite', wm_labels: 'Names and roads',
     wm_info_polygon: 'Click the field corners one by one ({n} points, at least 3 needed). Points can be dragged; Ctrl+Z undoes.',
     wm_info_polygon_ok: 'Outline: {n} points, about {ha} ha. Add more corners or click “Use”.',
     wm_info_parcel: 'Click a field — in Poland the ULDK parcel is fetched, in Central Asia the field from the Fields of The World satellite map (a few seconds). Several clicks = a field of several parts; clicking again removes a part. FTW outlines are model output — check them on the image.',
@@ -6018,7 +6775,7 @@ const EXTRA_I18N = {
     w_bal_lowconf: 'Low confidence: no major rain or irrigation in the window — the initial soil state is assumed.',
     w_bal_plan_note: 'Date suggested by the water balance (FAO-56).', w_risk_uni_irr: 'Uneven irrigation across the field', w_risk_uni: 'Uneven moisture across the field', w_risk_stress: 'Possible water stress', w_no_anomaly: 'No anomaly signal.',
     w_confirm_del: 'Deactivate this field in the water module?', w_ndwi_h: 'NDMI — observation history',
-    w_chart_alarm: 'Alert',
+    w_chart_alarm: 'Alert', w_chart_stress: 'Water stress', w_chart_warn: 'Warning',
     w_th_date: 'date', w_th_precip: 'rainfall (mm)', w_no_obs: 'no observations', w_log_h: 'Irrigation log',
     w_m_drip: 'drip', w_m_flood: 'flood', w_m_sprinkle: 'sprinkler',
     w_ph_amount: 'amount / duration', w_ph_unit: 'unit (mm, m³/ha, hours...)', w_add_entry: '+ Add entry',
@@ -6032,6 +6789,10 @@ const EXTRA_I18N = {
     w_err_save: 'Save failed', w_prompt_skip: 'Reason for skipping (optional):',
     w_field_n: 'field #{n}', w_done: '✓ Done', w_skip: 'Skip', w_no_upcoming: 'No irrigations planned.',
     w_triage_empty: 'Queue is empty — no alerts waiting for review.',
+    fm_h: "Farmers: panel and SMS", fm_hint: "Each farmer (phone number on the field) gets their own page via a link: soil water status, irrigation suggestion, alerts you confirmed (they can reply), and a log for irrigation and rain-gauge readings. SMS goes out only after you confirm an alert or on your command — unless you turn on automatic suggestions for that farmer.", fm_sms_on_confirm: "SMS to farmer", fm_note_for_farmer: "Note for the farmer — shown in their panel (optional):", fm_gateway: "SMS gateway", fm_no_gateway: "No SMS gateway (SMSAPI_TOKEN or TWILIO_*) — messages only go to the outbox; you can pass them on manually.", fm_no_base_url: "APP_BASE_URL is not set — links in SMS will not work. Set the public app address in .env.", fm_empty: "No farmers yet — add a phone number to a field in the water module.", fm_no_fields: "no active fields", fm_suggest: "Suggestion SMS", fm_suggest_title: "Send an SMS now with the irrigation suggestion from the water balance model", fm_last_ack: "Latest reply", fm_seen: "Last opened panel", fm_never_seen: "has not opened the panel yet", fm_name_ph: "full name", fm_lang: "Panel and SMS language", fm_opt_in: "SMS consent", fm_auto: "Automatic irrigation suggestions", fm_auto_title: "Every morning: SMS when the model expects stress within 2 days (at most once per 3 days per field, not right after irrigation). Skips your review — enable only for trusted fields.", fm_open: "Open panel", fm_copy: "Copy link", fm_copied: "copied", fm_send_link: "Send link by SMS", fm_new_link: "New link", fm_new_link_confirm: "Generate a new link? The old one will stop working.", fm_outbox_h: "SMS outbox (latest 20)", fm_outbox_empty: "No SMS sent yet.", fm_st_sent: "sent", fm_st_failed: "gateway error", fm_st_not_configured: "not sent — no SMS gateway", fm_st_opted_out: "farmer has not consented to SMS", fm_st_rate_limited: "daily SMS limit reached", fm_st_no_phone: "no phone number on the field", fm_kind_alert: "alert", fm_kind_suggestion: "suggestion", fm_kind_auto_suggestion: "automatic suggestion", fm_kind_panel_link: "panel link", fm_ack_seen: "read it", fm_ack_will_irrigate: "will irrigate", fm_ack_irrigated: "already irrigated", fm_ack_disagree: "disagrees",
+    op_btn: "Moisture (OPTRAM)", op_title: "Topsoil moisture from satellite (OPTRAM)", op_intro: "OPTRAM estimates moisture from how dark soil and vegetation look in shortwave infrared (Sentinel-2 band B12): water absorbs this light. Pixels from the area around the field over many dates form a trapezoid on an NDVI × STR plot — the lower edge is the driest state and the upper edge the wettest for a given vegetation cover. The field’s position between the edges gives relative moisture W from 0 (dry) to 1 (wet).", op_caveats: "W is relative, not volumetric %. It reflects the top few centimetres, and under a dense canopy (NDVI > 0.6) mostly plant water content. The trapezoid is fitted for an area of ~1.5 km around the field — recalibrate after a season change or major crop changes nearby. This is context for the verdict and water balance, not a separate alarm.", op_months: "last {n} months", op_calibrate: "Calibrate trapezoid", op_recalibrate: "Recalibrate", op_calibrating: "Computing… (up to 2 min)", op_calib_cost: "one Process API request (up to 60 scenes) + one Statistical API request", op_no_series: "No clear field observations in the calibration period.", op_pct: "{p}th percentile of this field’s values", op_cls_dry: "dry", op_cls_mid: "moderately moist", op_cls_wet: "moist", op_dense: "Dense canopy — the value mostly reflects plant water rather than soil.", op_quality: "Calibration quality", op_q_good: "good", op_q_limited: "limited", op_q_poor: "unreliable", op_calib_info: "period {from} – {to}, {s} scenes, {px} pixels", op_era5: "Agreement with ERA5-Land soil moisture 0–7 cm: r = {r} ({n} common dates).", op_era5_good: "— good, calibration looks reliable.", op_era5_mid: "— moderate.", op_era5_bad: "— weak, treat W with caution.", op_era5_none: "Too few dates shared with ERA5-Land to compare (run “Check now” or the history replay).", op_chart_trap: "Trapezoid: area pixels, dry and wet edges, field (orange)", op_chart_series: "Field moisture W over time and ERA5-Land 0–7 cm", op_pixels: "area pixels", op_edge_dry: "dry edge", op_edge_wet: "wet edge", op_field: "field", op_era5_label: "ERA5-Land 0–7 cm", op_refresh: "Fetch last 45 days", op_delete: "Delete calibration", op_delete_confirm: "Delete the OPTRAM calibration and moisture series for this field?", op_how: "How it works and limitations",
+    th_btn: "Thermal (Landsat)", th_title: "Landsat 8/9 thermal — water stress from canopy temperature", th_intro: "A crop with access to water cools itself by transpiration; when water runs short it closes its stomata and heats up — often days before NDVI/NDMI drop. We compare field temperature with the coolest dense (well-watered) vegetation and the hottest bare soil within ~1.5 km on the same scene. Thermal stress index TSI: 0 = as cool as the best-watered vegetation, 1 = as hot as dry soil.", th_caveats: "Copernicus Data Space offers Landsat only at Level-1 (since 2021): surface temperature is approximate (emissivity from NDVI, no atmospheric correction), so treat °C as indicative — TSI is relative within the scene and insensitive to that. The thermal pixel is 100 m: on fields under ~3 ha the result mixes with surroundings. Overpass ~10:30–11:00, every ~8 days (L8+L9), clear sky only. In winter and early spring there is no dense vegetation nearby = no TSI.", th_fetch: "Fetch thermal data", th_fetch_again: "Fetch again", th_cost: "one Process API request (up to 60 scenes)", th_small: "The field is {ha} ha — the Landsat thermal pixel is 100 m, so the result will mix with surroundings.", th_cls_ok: "crop is cooling by transpiration", th_cls_mid: "possible onset of stress", th_cls_high: "likely water stress or poor cover", th_no_ref: "No dense vegetation or bare soil nearby on this scene — TSI cannot be computed.", th_latest: "Scene {d}: field ≈ {t} °C · coolest vegetation ≈ {c} °C · hottest soil ≈ {h} °C · field NDVI {n}", th_spread: "Temperature spread within the field (p90−p10): {k} K — irrigation may be uneven.", th_low_cover: "Poor cover — temperature mostly reflects the soil.", th_n: "Cloud-free scenes over the field: {n}", th_tsi: "TSI (thermal stress)", th_t_field: "field °C", th_t_cold: "cool vegetation °C", th_t_hot: "hot soil °C", th_delete: "Delete thermal data", th_delete_confirm: "Delete stored thermal scenes for this field?", th_source: "Landsat 8/9 (USGS/NASA) via Copernicus Data Space",
+    bc_h: "Cover crop biomass and nitrogen — calibration on field samples (CIred-edge)", bc_intro: "The current biomass model comes from maize literature. CIred-edge (B07/B05 − 1) grows linearly with canopy chlorophyll and nitrogen and does not saturate in lush cover crops — but there are no published coefficients for Polish mixtures. Enter samples from your visits (frames, cutting, weighing): the app finds the nearest clear Sentinel-2 scene, compares models and lets you approve a model fitted to your data.", bc_proto_h: "How to take a sample", bc_proto_1: "Timing: within 5 days of a cloud-free Sentinel-2 overpass (ideally on the day). The app finds the nearest clear scene itself.", bc_proto_2: "Place 4 frames of 0.25 m² (50×50 cm) in spots typical for the field, at least 20 m from the edge; do not pick the best or worst spots.", bc_proto_3: "Cut all above-ground biomass at ground level and weigh the fresh mass from each frame (average in grams).", bc_proto_4: "Dry matter: dry a subsample at 60–65 °C to constant weight (~48 h) or use a tabulated DM % for the species; N — from lab analysis (% N in DM), optional.", bc_proto_5: "Sample fields with different vigour — from poor to very lush. The model can be approved from 8 samples and is reliable from about 15.", bc_f_parcel: "Parcel ID (ULDK)", bc_f_date: "Sample date", bc_f_mix: "Mixture / species", bc_f_frames: "Number of frames", bc_f_frame_m2: "Frame area (m²)", bc_f_fresh: "Fresh mass — average per frame (g)", bc_f_dmpct: "Dry matter (% of fresh)", bc_f_dm: "or directly: dry matter (t/ha)", bc_f_npct: "N in dry matter (%, optional)", bc_add: "Add sample", bc_calc: "= {dm} t DM/ha", bc_calc_n: "{n} kg N/ha", bc_missing: "Enter parcel ID, date and mass (fresh with DM % or dry t/ha).", bc_matching: "Looking for a Sentinel-2 scene…", bc_added_ok: "Added. Scene {d}, CIre {c}.", bc_added_nomatch: "Added, but no clear scene within ±5 days — the sample will not enter the fit (try “Match scene” later).", bc_empty: "No samples yet.", bc_col_parcel: "Parcel", bc_col_dm: "Dry matter t/ha", bc_col_scene: "S2 scene", bc_rematch: "Match scene", bc_rematch_fail: "error — try later", bc_delete_confirm: "Delete this sample?", bc_active: "Model in use:", bc_target_dm: "biomass", bc_target_n: "N uptake", bc_lit_model: "literature (EVI+NDRE+RVI, maize)", bc_clear: "Back to literature", bc_clear_confirm: "Withdraw the calibrated model? Estimates will return to the literature model.", bc_fit_h: "Fit on {n} samples with a matched scene", bc_col_model: "Model", bc_rmse_cv: "cross-validation error", bc_linear: "linear", bc_cmp_hint: "Cross-validation error: each sample is predicted by a model fitted to the others — an honest measure of error on a new field. Lower is better.", bc_apply_dm: "Approve biomass model", bc_apply_n: "Approve nitrogen model", bc_apply_dm_confirm: "Approve the CIre biomass model? From now on biomass estimates (including stored monitoring data) will use it.", bc_apply_n_confirm: "Approve the CIre N uptake model?", bc_applied: "Approved. Stored observations recomputed: {n}.", bc_samples: "samples", bc_fit_line: "fit", bc_n_line: "N in biomass: {lo}–{hi} kg/ha", bc_src_field: "model calibrated on field samples", bc_src_lit: "literature model (not calibrated on cover crops)", bc_extrap: "CIre outside the sample range — extrapolation",
     w_confirm: 'Confirm', w_visit: 'Needs a visit', w_reject: 'Reject', w_note_prompt: 'Note (optional):',
   },
   it: {
@@ -6122,7 +6883,7 @@ const EXTRA_I18N = {
     w_gen_sq: 'Genera quadrato', w_phone: 'Tel. agricoltore', w_name: 'Nome', w_notes: 'Note',
     w_add_btn: 'Aggiungi campo', w_add_ok: '✅ Campo aggiunto al modulo idrico',
     w_triage_h: 'Coda di revisione (consulente)',
-    w_triage_hint: 'Gli avvisi del motore di anomalie arrivano qui per primi — solo un avviso confermato deve raggiungere il pannello dell’agricoltore. Ogni risultato non è calibrato e va confermato in campo.',
+    w_triage_hint: 'Gli avvisi del motore di anomalie arrivano qui per primi — solo un avviso confermato raggiunge il pannello dell’agricoltore (e l’SMS, se selezionato). Ogni risultato non è calibrato e va confermato in campo.',
     w_loading: 'Caricamento...', w_map_h: 'Mappa dei campi con stato',
     w_map_legend: '🟢 nessuna anomalia / mai segnalato  ·  🟠 anomalia in attesa di revisione  ·  🔴 confermata in campo',
     w_plan_h: 'Calendario irriguo — prossime voci',
@@ -6164,7 +6925,7 @@ const EXTRA_I18N = {
     w_import_done: 'Aggiunti: {a}, saltati (già nel modulo): {s}, errori: {e}.',
     wm_title: 'Segna il campo sulla mappa', wm_search_ph: 'Cerca: località, indirizzo, coordinate (51.10, 17.03) o numero di particella',
     wm_search_btn: 'Cerca', wm_mode_polygon: 'Contorno del campo', wm_mode_parcel: 'Contorni pronti', wm_mode_pin: 'Puntina',
-    wm_undo: 'Annulla ultimo', wm_clear: 'Pulisci', wm_cancel: 'Annulla', wm_src_auto: 'PL: particelle catastali · fuori PL: campi da satellite', wm_src_ftw: 'Campi da satellite (FTW) — anche in PL', wm_ftw_tip: 'Campo da satellite (FTW {year}), affidabilità {conf}%, {ha} ha', wm_use: 'Usa', wm_layer_sat: 'Satellite',
+    wm_undo: 'Annulla ultimo', wm_clear: 'Pulisci', wm_cancel: 'Annulla', wm_src_auto: 'PL: particelle catastali · fuori PL: campi da satellite', wm_src_ftw: 'Campi da satellite (FTW) — anche in PL', wm_ftw_tip: 'Campo da satellite (FTW {year}), affidabilità {conf}%, {ha} ha', wm_use: 'Usa', wm_layer_sat: 'Satellite', wm_labels: 'Nomi e strade',
     wm_info_polygon: 'Clicca gli angoli del campo uno dopo l’altro ({n} punti, minimo 3). I punti si possono trascinare; Ctrl+Z annulla.',
     wm_info_polygon_ok: 'Contorno: {n} punti, circa {ha} ha. Aggiungi altri angoli o clicca “Usa”.',
     wm_info_parcel: 'Clicca su un campo — in Polonia viene scaricata la particella ULDK, in Asia centrale il campo dalla mappa satellitare Fields of The World (alcuni secondi). Più clic = campo di più parti; un nuovo clic rimuove la parte. I contorni FTW sono output di un modello — verificali sull’immagine.',
@@ -6185,7 +6946,7 @@ const EXTRA_I18N = {
     w_bal_lowconf: 'Bassa affidabilità: nessuna pioggia o irrigazione rilevante nella finestra — lo stato iniziale del suolo è ipotizzato.',
     w_bal_plan_note: 'Data suggerita dal bilancio idrico (FAO-56).', w_risk_uni_irr: 'Irrigazione non uniforme nel campo', w_risk_uni: 'Umidità non uniforme nel campo', w_risk_stress: 'Possibile stress idrico', w_no_anomaly: 'Nessun segnale di anomalia.',
     w_confirm_del: 'Disattivare questo campo nel modulo idrico?', w_ndwi_h: 'NDMI — storia delle osservazioni',
-    w_chart_alarm: 'Allarme',
+    w_chart_alarm: 'Allarme', w_chart_stress: 'Stress idrico', w_chart_warn: 'Avviso',
     w_th_date: 'data', w_th_precip: 'pioggia (mm)', w_no_obs: 'nessuna osservazione', w_log_h: 'Registro irriguo',
     w_m_drip: 'a goccia', w_m_flood: 'a sommersione', w_m_sprinkle: 'a pioggia',
     w_ph_amount: 'quantità / durata', w_ph_unit: 'unità (mm, m³/ha, ore...)', w_add_entry: '+ Aggiungi voce',
@@ -6199,12 +6960,64 @@ const EXTRA_I18N = {
     w_err_save: 'Salvataggio non riuscito', w_prompt_skip: 'Motivo dell’esclusione (facoltativo):',
     w_field_n: 'campo #{n}', w_done: '✓ Eseguito', w_skip: 'Salta', w_no_upcoming: 'Nessuna irrigazione pianificata.',
     w_triage_empty: 'Coda vuota — nessun avviso in attesa di revisione.',
+    fm_h: "Agricoltori: pannello e SMS", fm_hint: "Ogni agricoltore (numero di telefono sul campo) ha una propria pagina tramite link: stato dell’acqua nel suolo, suggerimento di irrigazione, avvisi da te confermati (può rispondere) e registro di irrigazioni e pluviometro. L’SMS parte solo dopo la conferma di un avviso o su tuo comando — a meno che tu non attivi i suggerimenti automatici per quell’agricoltore.", fm_sms_on_confirm: "SMS all’agricoltore", fm_note_for_farmer: "Nota per l’agricoltore — la vedrà nel suo pannello (facoltativa):", fm_gateway: "Gateway SMS", fm_no_gateway: "Nessun gateway SMS (SMSAPI_TOKEN o TWILIO_*) — i messaggi finiscono solo nella casella; puoi inoltrarli a mano.", fm_no_base_url: "APP_BASE_URL non impostato — i link negli SMS non funzioneranno. Imposta l’indirizzo pubblico dell’app in .env.", fm_empty: "Nessun agricoltore — aggiungi un numero di telefono a un campo nel modulo acqua.", fm_no_fields: "nessun campo attivo", fm_suggest: "SMS con suggerimento", fm_suggest_title: "Invia ora un SMS con il suggerimento di irrigazione dal modello di bilancio idrico", fm_last_ack: "Ultima risposta", fm_seen: "Ultimo accesso al pannello", fm_never_seen: "non ha ancora aperto il pannello", fm_name_ph: "nome e cognome", fm_lang: "Lingua del pannello e degli SMS", fm_opt_in: "Consenso SMS", fm_auto: "Suggerimenti di irrigazione automatici", fm_auto_title: "Ogni mattina: SMS quando il modello prevede stress entro 2 giorni (al massimo una volta ogni 3 giorni per campo, non subito dopo un’irrigazione). Salta la tua revisione — attivalo solo per campi affidabili.", fm_open: "Apri pannello", fm_copy: "Copia link", fm_copied: "copiato", fm_send_link: "Invia link via SMS", fm_new_link: "Nuovo link", fm_new_link_confirm: "Generare un nuovo link? Quello vecchio smetterà di funzionare.", fm_outbox_h: "Casella SMS (ultimi 20)", fm_outbox_empty: "Nessun SMS inviato finora.", fm_st_sent: "inviato", fm_st_failed: "errore del gateway", fm_st_not_configured: "non inviato — nessun gateway SMS", fm_st_opted_out: "l’agricoltore non ha dato il consenso agli SMS", fm_st_rate_limited: "limite giornaliero di SMS raggiunto", fm_st_no_phone: "nessun numero di telefono sul campo", fm_kind_alert: "avviso", fm_kind_suggestion: "suggerimento", fm_kind_auto_suggestion: "suggerimento automatico", fm_kind_panel_link: "link al pannello", fm_ack_seen: "ha letto", fm_ack_will_irrigate: "irrigherà", fm_ack_irrigated: "ha già irrigato", fm_ack_disagree: "non è d’accordo",
+    op_btn: "Umidità (OPTRAM)", op_title: "Umidità dello strato superficiale da satellite (OPTRAM)", op_intro: "OPTRAM stima l’umidità da quanto suolo e vegetazione appaiono scuri nell’infrarosso a onde corte (Sentinel-2, banda B12): l’acqua assorbe questa luce. I pixel dell’area intorno al campo in molte date formano un trapezio nel grafico NDVI × STR — il bordo inferiore è lo stato più secco, quello superiore il più umido a parità di copertura vegetale. La posizione del campo tra i bordi dà l’umidità relativa W da 0 (secco) a 1 (bagnato).", op_caveats: "W è relativa, non in % volumetrica. Riguarda i primi centimetri e, con chioma fitta (NDVI > 0,6), soprattutto l’acqua nelle piante. Il trapezio è stimato su un’area di ~1,5 km intorno al campo — ricalibrare dopo un cambio di stagione o grandi cambi di colture nei dintorni. È un contesto per il verdetto e il bilancio idrico, non un allarme separato.", op_months: "ultimi {n} mesi", op_calibrate: "Calibra il trapezio", op_recalibrate: "Ricalibra", op_calibrating: "Calcolo… (fino a 2 min)", op_calib_cost: "una richiesta Process API (fino a 60 scene) + una Statistical API", op_no_series: "Nessuna osservazione pulita del campo nel periodo di calibrazione.", op_pct: "{p}° percentile dei valori del campo", op_cls_dry: "secco", op_cls_mid: "moderatamente umido", op_cls_wet: "umido", op_dense: "Chioma fitta — il valore riflette soprattutto l’acqua nelle piante.", op_quality: "Qualità della calibrazione", op_q_good: "buona", op_q_limited: "limitata", op_q_poor: "inaffidabile", op_calib_info: "periodo {from} – {to}, {s} scene, {px} pixel", op_era5: "Accordo con l’umidità del suolo ERA5-Land 0–7 cm: r = {r} ({n} date comuni).", op_era5_good: "— buono, calibrazione affidabile.", op_era5_mid: "— moderato.", op_era5_bad: "— debole, usare W con cautela.", op_era5_none: "Troppe poche date in comune con ERA5-Land per il confronto (esegui “Controlla ora” o la riproduzione storica).", op_chart_trap: "Trapezio: pixel dell’area, bordi secco e umido, campo (arancione)", op_chart_series: "Umidità W del campo nel tempo ed ERA5-Land 0–7 cm", op_pixels: "pixel dell’area", op_edge_dry: "bordo secco", op_edge_wet: "bordo umido", op_field: "campo", op_era5_label: "ERA5-Land 0–7 cm", op_refresh: "Scarica ultimi 45 giorni", op_delete: "Elimina calibrazione", op_delete_confirm: "Eliminare la calibrazione OPTRAM e la serie di umidità di questo campo?", op_how: "Come funziona e limiti",
+    th_btn: "Termico (Landsat)", th_title: "Termico Landsat 8/9 — stress idrico dalla temperatura della coltura", th_intro: "Una coltura con acqua disponibile si raffredda con la traspirazione; quando l’acqua manca chiude gli stomi e si scalda — spesso giorni prima del calo di NDVI/NDMI. Confrontiamo la temperatura del campo con la vegetazione fitta più fresca (ben irrigata) e il suolo nudo più caldo entro ~1,5 km nella stessa scena. Indice di stress termico TSI: 0 = fresco come la vegetazione meglio irrigata, 1 = caldo come suolo secco.", th_caveats: "Copernicus Data Space offre Landsat solo al livello 1 (dal 2021): la temperatura superficiale è approssimata (emissività da NDVI, senza correzione atmosferica), quindi i °C sono indicativi — il TSI è relativo nella scena e non ne risente. Il pixel termico è di 100 m: sotto ~3 ha il risultato si mescola con i dintorni. Passaggio ~10:30–11:00, ogni ~8 giorni (L8+L9), solo cielo sereno. In inverno e inizio primavera manca vegetazione fitta nei dintorni = niente TSI.", th_fetch: "Scarica dati termici", th_fetch_again: "Scarica di nuovo", th_cost: "una richiesta Process API (fino a 60 scene)", th_small: "Il campo ha {ha} ha — il pixel termico Landsat è di 100 m, il risultato si mescolerà con i dintorni.", th_cls_ok: "la coltura si raffredda traspirando", th_cls_mid: "possibile inizio di stress", th_cls_high: "probabile stress idrico o copertura scarsa", th_no_ref: "Nessuna vegetazione fitta o suolo nudo nei dintorni in questa scena — TSI non calcolabile.", th_latest: "Scena {d}: campo ≈ {t} °C · vegetazione più fresca ≈ {c} °C · suolo più caldo ≈ {h} °C · NDVI campo {n}", th_spread: "Differenza di temperatura nel campo (p90−p10): {k} K — irrigazione forse non uniforme.", th_low_cover: "Copertura scarsa — la temperatura riflette soprattutto il suolo.", th_n: "Scene senza nuvole sul campo: {n}", th_tsi: "TSI (stress termico)", th_t_field: "campo °C", th_t_cold: "vegetazione fresca °C", th_t_hot: "suolo caldo °C", th_delete: "Elimina dati termici", th_delete_confirm: "Eliminare le scene termiche salvate per questo campo?", th_source: "Landsat 8/9 (USGS/NASA) tramite Copernicus Data Space",
+    bc_h: "Biomassa e azoto della cover crop — calibrazione su campioni di campo (CIred-edge)", bc_intro: "L’attuale modello di biomassa deriva dalla letteratura sul mais. CIred-edge (B07/B05 − 1) cresce linearmente con clorofilla e azoto della coltura e non satura nelle cover crop rigogliose — ma non esistono coefficienti pubblicati per le miscele polacche. Inserisci i campioni delle visite (quadrati, taglio, pesata): l’app trova la scena Sentinel-2 pulita più vicina, confronta i modelli e permette di approvare un modello sui tuoi dati.", bc_proto_h: "Come prelevare un campione", bc_proto_1: "Tempistica: entro 5 giorni da un passaggio Sentinel-2 senza nuvole (idealmente lo stesso giorno). L’app trova da sola la scena pulita più vicina.", bc_proto_2: "4 quadrati da 0,25 m² (50×50 cm) in punti tipici del campo, ad almeno 20 m dal bordo; non scegliere i punti migliori o peggiori.", bc_proto_3: "Tagliare tutta la biomassa aerea a livello del suolo e pesare la massa fresca di ogni quadrato (media in grammi).", bc_proto_4: "Sostanza secca: essiccare un sottocampione a 60–65 °C fino a peso costante (~48 h) o usare la % di s.s. tabellare per la specie; N — da analisi di laboratorio (% N sulla s.s.), facoltativo.", bc_proto_5: "Campiona campi con vigore diverso — da scarsi a molto rigogliosi. Il modello si può approvare da 8 campioni ed è affidabile da circa 15.", bc_f_parcel: "ID particella (ULDK)", bc_f_date: "Data campione", bc_f_mix: "Miscela / specie", bc_f_frames: "Numero di quadrati", bc_f_frame_m2: "Area quadrato (m²)", bc_f_fresh: "Massa fresca — media per quadrato (g)", bc_f_dmpct: "Sostanza secca (% della fresca)", bc_f_dm: "oppure direttamente: sostanza secca (t/ha)", bc_f_npct: "N nella sostanza secca (%, facoltativo)", bc_add: "Aggiungi campione", bc_calc: "= {dm} t s.s./ha", bc_calc_n: "{n} kg N/ha", bc_missing: "Inserisci ID particella, data e massa (fresca con % s.s. o secca t/ha).", bc_matching: "Cerco una scena Sentinel-2…", bc_added_ok: "Aggiunto. Scena {d}, CIre {c}.", bc_added_nomatch: "Aggiunto, ma senza scena pulita entro ±5 giorni — il campione non entra nell’adattamento (riprova “Abbina scena” più tardi).", bc_empty: "Nessun campione.", bc_col_parcel: "Particella", bc_col_dm: "Sostanza secca t/ha", bc_col_scene: "Scena S2", bc_rematch: "Abbina scena", bc_rematch_fail: "errore — riprova più tardi", bc_delete_confirm: "Eliminare questo campione?", bc_active: "Modello in uso:", bc_target_dm: "biomassa", bc_target_n: "asportazione N", bc_lit_model: "da letteratura (EVI+NDRE+RVI, mais)", bc_clear: "Torna alla letteratura", bc_clear_confirm: "Ritirare il modello calibrato? Le stime torneranno al modello da letteratura.", bc_fit_h: "Adattamento su {n} campioni con scena abbinata", bc_col_model: "Modello", bc_rmse_cv: "errore di validazione incrociata", bc_linear: "lineare", bc_cmp_hint: "Errore di validazione incrociata: ogni campione è previsto da un modello adattato sugli altri — misura onesta dell’errore su un campo nuovo. Più basso è meglio.", bc_apply_dm: "Approva modello biomassa", bc_apply_n: "Approva modello azoto", bc_apply_dm_confirm: "Approvare il modello di biomassa da CIre? D’ora in poi le stime di biomassa (anche quelle salvate nel monitoraggio) useranno questo modello.", bc_apply_n_confirm: "Approvare il modello di asportazione N da CIre?", bc_applied: "Approvato. Osservazioni salvate ricalcolate: {n}.", bc_samples: "campioni", bc_fit_line: "adattamento", bc_n_line: "N nella biomassa: {lo}–{hi} kg/ha", bc_src_field: "modello calibrato su campioni di campo", bc_src_lit: "modello da letteratura (non calibrato su cover crop)", bc_extrap: "CIre fuori dall’intervallo dei campioni — estrapolazione",
     w_confirm: 'Conferma', w_visit: 'Richiede una visita', w_reject: 'Rifiuta', w_note_prompt: 'Nota (facoltativa):',
   },
 };
 
 const SERVER_PHRASES = {
   en: [
+    ["Za mało próbek z dopasowaną sceną", "Too few samples with a matched scene"],
+    ["— model można zatwierdzić od", "— the model can be approved from"],
+    [", wiarygodny jest od ok.", ", reliable from about"],
+    ["Próbki obejmują wąski zakres CIre — zbierz też próbki z bardzo słabych i bardzo bujnych poplonów, inaczej model będzie ekstrapolował.", "Samples cover a narrow CIre range — also sample very poor and very lush cover crops, otherwise the model will extrapolate."],
+    ["Słaba zależność biomasy od CIre w próbkach (R² < 0,4) — sprawdź, czy daty próbek i scen się zgadzają oraz czy ramki są reprezentatywne dla pola.", "Weak biomass–CIre relationship in the samples (R² < 0.4) — check that sample and scene dates match and that frames are representative of the field."],
+    ["Za mało próbek do zatwierdzenia modelu (potrzeba", "Too few samples to approve the model (need"],
+    ["Ta forma modelu nie pasuje do danych.", "This model form does not fit the data."],
+    ["Nie ma takiej próbki.", "No such sample."],
+    ["Data próbki nie może być z przyszłości", "The sample date cannot be in the future"],
+    ["Termika Landsat (", "Landsat thermal ("],
+    ["): pole ok.", "): field approx."],
+    ["; różnica do najchłodniejszej gęstej roślinności w okolicy:", "; difference to the coolest dense vegetation nearby:"],
+    ["; indeks stresu termicznego", "; thermal stress index"],
+    ["rośliny chłodzą się transpiracją, bez oznak stresu", "crop is cooling by transpiration, no sign of stress"],
+    ["pole cieplejsze od dobrze uwodnionej roślinności — możliwy początek stresu", "field warmer than well-watered vegetation — possible onset of stress"],
+    ["pole nagrzane prawie jak sucha gleba — prawdopodobny stres wodny albo słaba okrywa", "field almost as hot as dry soil — likely water stress or poor cover"],
+    ["(brak gęstej roślinności w okolicy do porównania)", "(no dense vegetation nearby for comparison)"],
+    ["Słaba okrywa — temperatura odzwierciedla głównie glebę.", "Poor cover — temperature mostly reflects the soil."],
+    ["Różnica temperatur w polu", "Temperature spread within the field"],
+    ["— możliwe nierówne nawodnienie.", "— irrigation may be uneven."],
+    ["Termika potwierdza sygnał stresu.", "Thermal data confirm the stress signal."],
+    ["Termika nie pokazuje stresu — rozważ inne przyczyny spadku.", "Thermal data show no stress — consider other causes of the decline."],
+    ["Pusty okres (dane Landsat na CDSE są od 2021-01-01).", "Empty period (Landsat data on CDSE start on 2021-01-01)."],
+    ["Blad termiki Landsat:", "Landsat thermal error:"],
+    ["Krawędzie trapezu schodzą się albo krzyżują w zakresie NDVI 0–0,9 — wilgotność z tej kalibracji jest niewiarygodna.", "The trapezoid edges converge or cross within NDVI 0–0.9 — moisture from this calibration is unreliable."],
+    ["Krawędź mokra nie jest bardziej stroma niż sucha (nietypowy trapez) — prawdopodobnie w okresie zabrakło mokrych terminów.", "The wet edge is not steeper than the dry edge (atypical trapezoid) — the period probably lacked wet dates."],
+    ["Liczba scen w okresie:", "Scenes in the period:"],
+    ["— wydłuż okres kalibracji.", "— extend the calibration period."],
+    ["Mało czystych pikseli:", "Few clear pixels:"],
+    ["Wąski zakres NDVI w regionie", "Narrow NDVI range in the area"],
+    ["— krawędzie są ekstrapolowane.", "— the edges are extrapolated."],
+    ["Słabe dopasowanie krawędzi", "Weak edge fit"],
+    ["(R² sucha", "(R² dry"],
+    [", mokra ", ", wet "],
+    ["Za mało czystych pikseli do kalibracji", "Too few clear pixels for calibration"],
+    ["Za wąski zakres NDVI w regionie", "NDVI range in the area too narrow"],
+    ["przedziałów po", "bins of"],
+    ["wydłuż okres kalibracji albo powiększ region.", "extend the calibration period or enlarge the area."],
+    ["Okres kalibracji musi mieć co najmniej 60 dni (najlepiej 12 miesięcy).", "The calibration period must be at least 60 days (ideally 12 months)."],
+    ["Wilgotność wierzchniej warstwy z satelity (OPTRAM,", "Topsoil moisture from satellite (OPTRAM,"],
+    ["w skali 0–1 — umiarkowanie wilgotno", "on a 0–1 scale — moderately moist"],
+    ["w skali 0–1 — wilgotno", "on a 0–1 scale — moist"],
+    ["w skali 0–1 — sucho", "on a 0–1 scale — dry"],
+    ["percentyl wartości tego pola od kalibracji", "percentile of this field’s values since calibration"],
+    ["Przy zwartym łanie wskaźnik pokazuje raczej uwodnienie roślin niż gleby.", "Under a dense canopy the index mostly reflects plant water rather than soil."],
+    ["(kalibracja trapezu o ograniczonej jakości)", "(trapezoid calibration of limited quality)"],
+    ["Pole nie ma jeszcze kalibracji OPTRAM.", "The field has no OPTRAM calibration yet."],
+    ["Blad kalibracji OPTRAM:", "OPTRAM calibration error:"],
     ['Werdykt obniżony z OBECNY do PRAWDOPODOBNY — wymaga weryfikacji operatora.', 'Verdict lowered from PRESENT to PROBABLE — operator verification required.'],
     ['⚠ Wykryto niezadeklarowane zdarzenie agrotechniczne', '⚠ Undeclared field operation detected'],
     ['⚠ Nieoczekiwana likwidacja — wymaga wyjaśnienia.', '⚠ Unexpected termination — needs an explanation.'],
@@ -6348,6 +7161,54 @@ const SERVER_PHRASES = {
     [' dni (', ' days ('],
   ],
   it: [
+    ["Za mało próbek z dopasowaną sceną", "Troppo pochi campioni con scena abbinata"],
+    ["— model można zatwierdzić od", "— il modello si può approvare da"],
+    [", wiarygodny jest od ok.", ", affidabile da circa"],
+    ["Próbki obejmują wąski zakres CIre — zbierz też próbki z bardzo słabych i bardzo bujnych poplonów, inaczej model będzie ekstrapolował.", "I campioni coprono un intervallo ristretto di CIre — campiona anche cover crop molto scarse e molto rigogliose, altrimenti il modello estrapolerà."],
+    ["Słaba zależność biomasy od CIre w próbkach (R² < 0,4) — sprawdź, czy daty próbek i scen się zgadzają oraz czy ramki są reprezentatywne dla pola.", "Relazione biomassa–CIre debole nei campioni (R² < 0,4) — verifica che le date di campioni e scene coincidano e che i quadrati siano rappresentativi del campo."],
+    ["Za mało próbek do zatwierdzenia modelu (potrzeba", "Troppo pochi campioni per approvare il modello (servono"],
+    ["Ta forma modelu nie pasuje do danych.", "Questa forma del modello non si adatta ai dati."],
+    ["Nie ma takiej próbki.", "Campione inesistente."],
+    ["Data próbki nie może być z przyszłości", "La data del campione non può essere nel futuro"],
+    ["Termika Landsat (", "Termico Landsat ("],
+    ["): pole ok.", "): campo circa"],
+    ["; różnica do najchłodniejszej gęstej roślinności w okolicy:", "; differenza rispetto alla vegetazione fitta più fresca nei dintorni:"],
+    ["; indeks stresu termicznego", "; indice di stress termico"],
+    ["rośliny chłodzą się transpiracją, bez oznak stresu", "la coltura si raffredda traspirando, nessun segno di stress"],
+    ["pole cieplejsze od dobrze uwodnionej roślinności — możliwy początek stresu", "campo più caldo della vegetazione ben irrigata — possibile inizio di stress"],
+    ["pole nagrzane prawie jak sucha gleba — prawdopodobny stres wodny albo słaba okrywa", "campo caldo quasi come suolo secco — probabile stress idrico o copertura scarsa"],
+    ["(brak gęstej roślinności w okolicy do porównania)", "(nessuna vegetazione fitta nei dintorni per il confronto)"],
+    ["Słaba okrywa — temperatura odzwierciedla głównie glebę.", "Copertura scarsa — la temperatura riflette soprattutto il suolo."],
+    ["Różnica temperatur w polu", "Differenza di temperatura nel campo"],
+    ["— możliwe nierówne nawodnienie.", "— irrigazione forse non uniforme."],
+    ["Termika potwierdza sygnał stresu.", "Il termico conferma il segnale di stress."],
+    ["Termika nie pokazuje stresu — rozważ inne przyczyny spadku.", "Il termico non mostra stress — considera altre cause del calo."],
+    ["Pusty okres (dane Landsat na CDSE są od 2021-01-01).", "Periodo vuoto (i dati Landsat su CDSE partono dal 2021-01-01)."],
+    ["Blad termiki Landsat:", "Errore termico Landsat:"],
+    ["Krawędzie trapezu schodzą się albo krzyżują w zakresie NDVI 0–0,9 — wilgotność z tej kalibracji jest niewiarygodna.", "I bordi del trapezio convergono o si incrociano nell’intervallo NDVI 0–0,9 — l’umidità di questa calibrazione è inaffidabile."],
+    ["Krawędź mokra nie jest bardziej stroma niż sucha (nietypowy trapez) — prawdopodobnie w okresie zabrakło mokrych terminów.", "Il bordo umido non è più ripido di quello secco (trapezio atipico) — probabilmente nel periodo mancavano date umide."],
+    ["Liczba scen w okresie:", "Scene nel periodo:"],
+    ["— wydłuż okres kalibracji.", "— allunga il periodo di calibrazione."],
+    ["Mało czystych pikseli:", "Pochi pixel puliti:"],
+    ["Wąski zakres NDVI w regionie", "Intervallo NDVI ristretto nell’area"],
+    ["— krawędzie są ekstrapolowane.", "— i bordi sono estrapolati."],
+    ["Słabe dopasowanie krawędzi", "Adattamento dei bordi debole"],
+    ["(R² sucha", "(R² secco"],
+    [", mokra ", ", umido "],
+    ["Za mało czystych pikseli do kalibracji", "Troppo pochi pixel puliti per la calibrazione"],
+    ["Za wąski zakres NDVI w regionie", "Intervallo NDVI dell’area troppo ristretto"],
+    ["przedziałów po", "classi da"],
+    ["wydłuż okres kalibracji albo powiększ region.", "allunga il periodo di calibrazione o allarga l’area."],
+    ["Okres kalibracji musi mieć co najmniej 60 dni (najlepiej 12 miesięcy).", "Il periodo di calibrazione deve essere di almeno 60 giorni (idealmente 12 mesi)."],
+    ["Wilgotność wierzchniej warstwy z satelity (OPTRAM,", "Umidità dello strato superficiale da satellite (OPTRAM,"],
+    ["w skali 0–1 — umiarkowanie wilgotno", "su scala 0–1 — moderatamente umido"],
+    ["w skali 0–1 — wilgotno", "su scala 0–1 — umido"],
+    ["w skali 0–1 — sucho", "su scala 0–1 — secco"],
+    ["percentyl wartości tego pola od kalibracji", "percentile dei valori di questo campo dalla calibrazione"],
+    ["Przy zwartym łanie wskaźnik pokazuje raczej uwodnienie roślin niż gleby.", "Con chioma fitta l’indice riflette soprattutto l’acqua nelle piante, non nel suolo."],
+    ["(kalibracja trapezu o ograniczonej jakości)", "(calibrazione del trapezio di qualità limitata)"],
+    ["Pole nie ma jeszcze kalibracji OPTRAM.", "Il campo non ha ancora una calibrazione OPTRAM."],
+    ["Blad kalibracji OPTRAM:", "Errore di calibrazione OPTRAM:"],
     ['Werdykt obniżony z OBECNY do PRAWDOPODOBNY — wymaga weryfikacji operatora.', 'Verdetto abbassato da PRESENTE a PROBABILE — serve la verifica dell’operatore.'],
     ['⚠ Wykryto niezadeklarowane zdarzenie agrotechniczne', '⚠ Rilevata un’operazione di campo non dichiarata'],
     ['⚠ Nieoczekiwana likwidacja — wymaga wyjaśnienia.', '⚠ Terminazione imprevista — serve una spiegazione.'],
@@ -6626,6 +7487,7 @@ function applyLang(){
   // kalibracja i lista monitoringu — odśwież, bo renderują tekst w JS (t())
   if(document.getElementById('calStatus')){ _setText('calStatus', 'cal_loading'); loadCalibrationStatus(); }
   if(document.getElementById('monList')) loadMonitorList();
+  if(document.getElementById('bcFit') && document.getElementById('viewMonitor').style.display === 'block'){ bcLoad(); bcUpdateCalc(); }
 
   // footer
   const footer = document.querySelector('footer');
@@ -6730,6 +7592,7 @@ function _syncVisibleLang(){
     loadWaterFieldList();
     loadWaterTriageQueue();
     loadWaterPlanUpcoming();
+    loadFarmers();
   }
 }
 
