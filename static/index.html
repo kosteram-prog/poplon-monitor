@@ -292,6 +292,11 @@ input[type=tel]{width:100%;padding:9px 12px;border:1.5px solid var(--line);borde
 .vd-ev-more[open] > summary::after{content:" ▴"}
 .vd-ev-more p{margin:6px 0 0;color:var(--ink-2);font-size:13px;max-width:72ch}
 .vd-ev-more .btn-insar{margin-top:8px}
+.w-square{margin-top:8px}
+.w-square > summary{cursor:pointer;color:var(--muted);font-size:12.5px;list-style:none;width:max-content;max-width:100%}
+.w-square > summary::-webkit-details-marker{display:none}
+.w-square > summary::before{content:"▸ ";color:var(--green-deep)}
+.w-square[open] > summary::before{content:"▾ "}
 
 .vd-figs{display:grid;grid-template-columns:minmax(0,1.55fr) minmax(0,1fr);border-bottom:1px solid var(--line)}
 .vd-ndvi{padding:18px 22px 16px}
@@ -415,6 +420,30 @@ input[type=tel]{width:100%;padding:9px 12px;border:1.5px solid var(--line);borde
   .vd-big{font-size:25px}
   .vd-fig{padding:14px 16px}
 }
+
+/* --- Okno mapy modułu wodnego (pinezka / obrys / działka ULDK) --- */
+.wm-backdrop{position:fixed;inset:0;background:rgba(20,32,12,.55);z-index:3000;display:flex;align-items:center;justify-content:center;padding:16px}
+.wm-backdrop[hidden]{display:none}
+.wm-dialog{background:var(--panel);border-radius:14px;width:min(1100px,100%);max-height:100%;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.3)}
+.wm-head{display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid var(--line);font-weight:600;color:var(--ink)}
+.wm-head button{border:0;background:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1}
+.wm-bar{display:flex;gap:8px;flex-wrap:wrap;padding:10px 16px;border-bottom:1px solid var(--line);align-items:center}
+.wm-bar input[type=text]{flex:1 1 260px;min-width:0;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;background:var(--input-bg)}
+.wm-bar button,.wm-foot button.secondary{font-size:12.5px}
+.wm-modes{display:flex;gap:6px;flex-wrap:wrap}
+.wm-modes button{border:1px solid var(--line);background:var(--input-bg);border-radius:8px;padding:6px 10px;font:inherit;font-size:12.5px;cursor:pointer;color:var(--ink)}
+.wm-modes button.on{background:var(--green-deep);border-color:var(--green-deep);color:#fff}
+#wmMap{height:min(62vh,620px);min-height:280px}
+#wmMap.wm-draw{cursor:crosshair}
+.wm-foot{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:10px 16px;border-top:1px solid var(--line)}
+.wm-foot .wm-info{font-size:12.5px;color:var(--muted);flex:1 1 300px}
+.wm-foot .wm-btns{display:flex;gap:8px}
+.wm-foot button.primary{width:auto;padding:9px 18px}
+.wm-vertex{width:12px;height:12px;border-radius:50%;background:#fff;border:2px solid #E8590C;box-shadow:0 0 0 1px rgba(0,0,0,.3)}
+.wm-results{position:absolute;z-index:1000;background:#fff;border:1px solid var(--line);border-radius:8px;box-shadow:0 6px 18px rgba(0,0,0,.15);max-height:220px;overflow:auto;font-size:12.5px}
+.wm-results div{padding:7px 10px;cursor:pointer;border-bottom:1px solid #EEF1EA}
+.wm-results div:hover{background:var(--green-light)}
+@media (max-width:640px){.wm-backdrop{padding:0}.wm-dialog{border-radius:0;height:100%}#wmMap{flex:1;height:auto}}
 </style>
 </head>
 <body>
@@ -438,6 +467,7 @@ input[type=tel]{width:100%;padding:9px 12px;border:1.5px solid var(--line);borde
   <button class="tab-btn" data-mode="batch" id="tabBatch" data-i18n="tab_batch">Wiele działek naraz</button>
   <button class="tab-btn" data-mode="monitor" id="tabMonitor" data-i18n="tab_monitor">Monitoring sezonu</button>
   <button class="tab-btn" data-mode="water" id="tabWater" data-i18n="tab_water">Moduł wodny</button>
+  <button class="tab-btn" data-mode="yield" id="tabYield" data-i18n="tab_yield">Strefy plonu</button>
 </div>
 
 <!-- ====================== TRYB: POJEDYNCZA DZIAŁKA ====================== -->
@@ -715,6 +745,42 @@ input[type=tel]{width:100%;padding:9px 12px;border:1.5px solid var(--line);borde
 
 <footer>Dane: Sentinel-2 L2A (Copernicus Data Space Ecosystem), geometrie działek: ULDK GUGiK,
 podkład: ortofotomapa Geoportal. Wynik ma charakter poglądowy — nie zastępuje kontroli na miejscu.</footer>
+
+<div class="wm-backdrop" id="wmModal" hidden onclick="if(event.target===this) wmClose()">
+  <div class="wm-dialog" role="dialog" aria-modal="true" aria-labelledby="wmTitle">
+    <div class="wm-head"><span id="wmTitle" data-i18n="wm_title">Zaznacz pole na mapie</span>
+      <button type="button" onclick="wmClose()" aria-label="Zamknij">✕</button></div>
+    <div class="wm-bar" style="position:relative">
+      <input type="text" id="wmSearch" data-i18n-ph="wm_search_ph" placeholder="Szukaj: miejscowość, adres, współrzędne (51.10, 17.03) lub nr działki"
+        onkeydown="if(event.key==='Enter'){event.preventDefault();wmSearch();}">
+      <button class="secondary" type="button" onclick="wmSearch()" data-i18n="wm_search_btn">Szukaj</button>
+      <div class="wm-results" id="wmResults" style="display:none;left:16px;top:52px"></div>
+    </div>
+    <div class="wm-bar">
+      <div class="wm-modes">
+        <button type="button" id="wmModePolygon" onclick="wmSetMode('polygon')">✏️ <span data-i18n="wm_mode_polygon">Obrys pola</span></button>
+        <button type="button" id="wmModeParcel" onclick="wmSetMode('parcel')">▦ <span data-i18n="wm_mode_parcel">Gotowe obrysy</span></button>
+        <select id="wmSource" style="display:none;max-width:260px;border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:inherit;font-size:12.5px;background:var(--input-bg)">
+          <option value="auto" data-i18n="wm_src_auto">PL: działki ewidencyjne · poza PL: pola z satelity</option>
+          <option value="ftw" data-i18n="wm_src_ftw">Pola z satelity (FTW) — także w PL</option>
+        </select>
+        <button type="button" id="wmModePin" onclick="wmSetMode('pin')">📍 <span data-i18n="wm_mode_pin">Pinezka</span></button>
+      </div>
+      <div class="wm-modes" style="margin-left:auto">
+        <button type="button" onclick="wmUndo()">↶ <span data-i18n="wm_undo">Cofnij</span></button>
+        <button type="button" onclick="wmClear()" data-i18n="wm_clear">Wyczyść</button>
+      </div>
+    </div>
+    <div id="wmMap"></div>
+    <div class="wm-foot">
+      <div class="wm-info" id="wmInfo"></div>
+      <div class="wm-btns">
+        <button class="secondary" type="button" onclick="wmClose()" data-i18n="wm_cancel">Anuluj</button>
+        <button class="primary" type="button" id="wmUseBtn" onclick="wmUse()" data-i18n="wm_use">Użyj</button>
+      </div>
+    </div>
+  </div>
+</div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
@@ -3321,6 +3387,57 @@ async function applyCalibration(newHigh, newMid){
 }
 </script>
 
+<div class="page-water" id="viewYield" style="display:none">
+  <div class="monitor-grid" style="margin-bottom:20px">
+    <section class="card">
+      <div class="card-h" data-i18n="y_form_h">Nowa mapa stref plonu (MVI)</div>
+      <div class="card-b">
+        <p class="hint" style="margin-bottom:10px" data-i18n="y_intro">Plon zgłoszony przez rolnika dla całego pola rozkładamy na piksele 10 m według wigoru i wilgotności łanu w sezonie (MVI = mediana EVI2 × 75. percentyl NDMI, Sentinel-2). Średnia mapy = plon zgłoszony.</p>
+        <div class="field"><label data-i18n="y_label">Nazwa mapy</label>
+          <input type="text" id="yLabel" data-i18n-ph="y_label_ph" placeholder="np. LENs-07 kukurydza 2026"></div>
+        <div class="field"><label><span data-i18n="y_pid">Numer działki</span> <span class="hint" data-i18n="y_pid_hint">(TERYT; kilka sąsiednich — po przecinku)</span></label>
+          <input class="mono" type="text" id="yPid" placeholder="141201_1.0001.6509"></div>
+        <div class="field"><label><span data-i18n="y_geom">Obrys pola (WKT)</span> <span class="hint" data-i18n="w_geom_opt">(niepotrzebna dla polskich działek)</span></label>
+          <button class="secondary" type="button" style="font-size:12.5px;margin:2px 0 8px" onclick="wmOpen({pid:'yPid', wkt:'yWkt', pin:false})">🗺️ <span data-i18n="y_map_pick">Zaznacz pole na mapie</span></button>
+          <textarea id="yWkt" rows="2" class="mono" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:9px;font-size:12px;resize:vertical"></textarea></div>
+        <div class="row2 field">
+          <div><label data-i18n="y_crop">Uprawa</label>
+            <select id="yCrop" onchange="yieldFillWindow()" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:9px;font:inherit;background:var(--input-bg)">
+              <option value="kukurydza">kukurydza</option><option value="pszenica">pszenica</option>
+              <option value="jęczmień">jęczmień</option><option value="pszenżyto">pszenżyto</option>
+              <option value="żyto">żyto</option><option value="rzepak">rzepak</option>
+              <option value="soja">soja</option><option value="burak cukrowy">burak cukrowy</option>
+              <option value="ziemniak">ziemniak</option><option value="bawełna">bawełna</option>
+            </select></div>
+          <div><label data-i18n="y_year">Sezon (rok)</label>
+            <input type="number" id="yYear" min="2017" max="2100" onchange="yieldFillWindow()"></div>
+        </div>
+        <div class="row2 field">
+          <div><label data-i18n="y_from">Okres od</label><input type="date" id="yFrom"></div>
+          <div><label data-i18n="y_to">do</label><input type="date" id="yTo"></div>
+        </div>
+        <p class="hint" style="margin:-4px 0 10px" data-i18n="y_window_hint">Okres podpowiada się dla uprawy (faza, w której łan najlepiej różnicuje plon) — możesz go zmienić.</p>
+        <div class="field"><label data-i18n="y_yield">Plon zgłoszony przez rolnika [t/ha]</label>
+          <input type="number" id="yYield" step="0.1" min="0.1" max="200" placeholder="np. 9.8"></div>
+        <button class="primary" id="yBtn" type="button" onclick="yieldCreate()" data-i18n="y_btn">Policz mapę stref</button>
+        <div class="error" id="yErr" style="margin-top:10px"></div>
+      </div>
+    </section>
+    <section class="card">
+      <div class="card-h" id="yMapTitle" data-i18n="y_map_h">Mapa stref</div>
+      <div class="card-b">
+        <div id="yieldMap" style="height:380px;border-radius:10px;overflow:hidden"></div>
+        <div id="yieldDetail" style="margin-top:10px;font-size:12.5px"></div>
+      </div>
+    </section>
+  </div>
+  <section class="card" style="margin-bottom:24px">
+    <div class="card-h" data-i18n="y_list_h">Zapisane mapy</div>
+    <div class="card-b"><div id="yieldList"></div>
+      <p class="hint" style="margin-top:8px" data-i18n="y_caveat">MVI zwalidowano na kukurydzy i soi w USA (Landsat). Dla polskich upraw traktuj mapę jako względną (gdzie w polu lepiej / gorzej) do czasu porównania z mapą plonu z kombajnu.</p></div>
+  </section>
+</div>
+
 <div class="page-water" id="viewWater" style="display:none">
 
   <div class="monitor-grid" style="margin-bottom:20px">
@@ -3330,8 +3447,10 @@ async function applyCalibration(newHigh, newMid){
       <div class="card-h" data-i18n="w_add_h">Dodaj pole do modułu wodnego</div>
       <div class="card-b">
         <div class="field">
-          <label data-i18n="w_pid">ID pola / działki</label>
+          <label><span data-i18n="w_pid">ID pola / działki</span> <span class="hint" data-i18n="w_pid_hint">(polski numer działki TERYT — obrys pobierze się sam; kilka działek oddziel przecinkiem)</span></label>
           <input class="mono" type="text" id="waterPid" data-i18n-ph="w_ph_pid" placeholder="np. 141201_1.0001.6509 albo UZB-Samarkand-12">
+          <label style="display:flex;gap:6px;align-items:center;font-size:12.5px;margin-top:6px;font-weight:400">
+            <input type="checkbox" id="waterSplit"> <span data-i18n="w_split">Każda działka jako osobne pole (gdy wpisujesz kilka numerów)</span></label>
         </div>
         <div class="field">
           <label data-i18n="w_mode">Tryb</label>
@@ -3359,20 +3478,22 @@ async function applyCalibration(newHigh, newMid){
         </div>
 
         <div class="field">
-          <label data-i18n="w_geom">Geometria pola (WKT, WGS84)</label>
+          <label><span data-i18n="w_geom">Geometria pola (WKT, WGS84)</span> <span class="hint" data-i18n="w_geom_opt">(niepotrzebna dla polskich działek)</span></label>
+          <button class="secondary" type="button" style="font-size:12.5px;margin:2px 0 8px" onclick="wmOpen()">🗺️ <span data-i18n="w_map_pick">Zaznacz na mapie (pinezka, obrys albo działka)</span></button>
           <textarea id="waterGeomWkt" rows="2" class="mono" style="width:100%;border:1px solid var(--line);
             border-radius:7px;padding:9px;font-size:12px;resize:vertical"
             placeholder="POLYGON((17.03 51.10, 17.032 51.10, 17.032 51.102, 17.03 51.102, 17.03 51.10))"></textarea>
-          <p class="hint" style="margin-top:6px" data-i18n="w_geom_hint">
-            Nie masz gotowego WKT? Podaj środek pola i wygeneruj przybliżony kwadrat:</p>
-          <div class="row2" style="margin-top:6px">
-            <input type="text" id="waterGeomLat" data-i18n-ph="w_ph_lat" placeholder="szer. geogr. (lat), np. 51.101">
-            <input type="text" id="waterGeomLon" data-i18n-ph="w_ph_lon" placeholder="dł. geogr. (lon), np. 17.031">
-          </div>
-          <div class="row2" style="margin-top:6px;align-items:center">
-            <input type="number" id="waterGeomSide" data-i18n-ph="w_ph_side" placeholder="bok kwadratu w metrach" value="100">
-            <button class="secondary" type="button" style="font-size:12px" data-i18n="w_gen_sq" onclick="waterGenSquareWkt()">Wygeneruj kwadrat</button>
-          </div>
+          <details class="w-square">
+            <summary><span data-i18n="w_geom_hint">Nie masz gotowego WKT? Podaj środek pola i wygeneruj przybliżony kwadrat:</span></summary>
+            <div class="row2" style="margin-top:6px">
+              <input type="text" id="waterGeomLat" data-i18n-ph="w_ph_lat" placeholder="szer. geogr. (lat), np. 51.101">
+              <input type="text" id="waterGeomLon" data-i18n-ph="w_ph_lon" placeholder="dł. geogr. (lon), np. 17.031">
+            </div>
+            <div class="row2" style="margin-top:6px;align-items:center">
+              <input type="number" id="waterGeomSide" data-i18n-ph="w_ph_side" placeholder="bok kwadratu w metrach" value="100">
+              <button class="secondary" type="button" style="font-size:12px" data-i18n="w_gen_sq" onclick="waterGenSquareWkt()">Wygeneruj kwadrat</button>
+            </div>
+          </details>
         </div>
 
         <div class="row2 field">
@@ -3396,6 +3517,15 @@ async function applyCalibration(newHigh, newMid){
           background:#EAF3EC;border-radius:7px;color:var(--green-deep);font-size:13px">
           <span data-i18n="w_add_ok">✅ Pole dodane do modułu wodnego</span>
         </div>
+        <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--line)">
+          <label style="font-size:12.5px;font-weight:600"><span data-i18n="w_import_h">Import wielu pól z pliku</span>
+            <span class="hint" data-i18n="w_import_hint">(GeoJSON albo CSV z kolumną wkt; dla polskich działek wystarczy kolumna parcel_id. Tryb, region i uprawa z formularza są domyślne.)</span></label>
+          <div class="row2" style="margin-top:6px;align-items:center">
+            <input type="file" id="waterImportFile" accept=".geojson,.json,.csv,.txt">
+            <button class="secondary" type="button" style="font-size:12px" onclick="waterImport(this)" data-i18n="w_import_btn">Importuj</button>
+          </div>
+          <div id="waterImportOut" style="font-size:12px;margin-top:6px"></div>
+        </div>
       </div>
     </section>
 
@@ -3413,6 +3543,12 @@ async function applyCalibration(newHigh, newMid){
           Każdy wynik jest niekalibrowany i wymaga potwierdzenia w terenie.
         </p>
         <div id="waterTriageList"><p class="empty-hint" style="padding:16px 0;text-align:center" data-i18n="w_loading">Ładowanie...</p></div>
+        <div style="margin-top:16px;padding-top:12px;border-top:1px dashed var(--line)">
+          <div style="font-size:12.5px;font-weight:600" data-i18n="w_cal_h">Kalibracja progu z ocenionej powtórki</div>
+          <p class="hint" style="margin:4px 0 8px" data-i18n="w_cal_hint">Oceń alarmy w „Powtórce na historii” (trafny / fałszywy) i dopisz przeoczone problemy. Sugestia progu uwzględnia oba rodzaje błędów.</p>
+          <button class="secondary" type="button" style="font-size:12px" onclick="waterCalSuggest(this)" data-i18n="w_cal_btn">Policz sugestię progu</button>
+          <div id="waterCalOut" style="font-size:12px;margin-top:8px"></div>
+        </div>
       </div>
     </section>
   </div>
@@ -3472,6 +3608,124 @@ async function applyCalibration(newHigh, newMid){
  * Swiadomie NIE dodano tu mapy (sekcja 6.1 planu: "mapa pol ze statusem")
  * -- to osobna, wieksza zmiana (Leaflet + geometrie per pole), zostawiona
  * na kolejny krok. Historia/alerty/log nawodnienia sa tutaj w calosci. */
+
+/* === ZAKŁADKA: STREFY PLONU (MVI) === */
+document.getElementById('tabYield').addEventListener('click', () => switchTab('yield'));
+const _origSwitchTabYield = switchTab;
+switchTab = function(mode){
+  document.getElementById('tabYield').classList.toggle('active', mode === 'yield');
+  document.getElementById('viewYield').style.display = mode === 'yield' ? 'block' : 'none';
+  _origSwitchTabYield(mode);
+  if(mode === 'yield'){
+    initYieldMap();
+    setTimeout(() => { if(yieldMap) yieldMap.invalidateSize(); }, 50);
+    const y = document.getElementById('yYear');
+    if(!y.value){ y.value = new Date().getFullYear(); yieldFillWindow(); }
+    loadYieldList();
+  }
+};
+
+let yieldMap = null, yieldLayer = null;
+function initYieldMap(){
+  if(yieldMap) return;
+  yieldMap = L.map('yieldMap', {scrollWheelZoom:false, maxZoom:20});
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:20, maxNativeZoom:19, attribution:'Tiles © Esri — Esri, Maxar, Earthstar Geographics'}).addTo(yieldMap);
+  yieldLayer = L.layerGroup().addTo(yieldMap);
+  yieldMap.setView([52.1, 19.3], 6);
+}
+
+async function yieldFillWindow(){
+  const crop = document.getElementById('yCrop').value, year = document.getElementById('yYear').value;
+  if(!crop || !year) return;
+  try{
+    const r = await fetch(`/api/yield/crop_window?crop_type=${encodeURIComponent(crop)}&season_year=${year}`);
+    const d = await r.json();
+    if(r.ok){ document.getElementById('yFrom').value = d.date_from; document.getElementById('yTo').value = d.date_to; }
+  }catch(e){}
+}
+
+async function yieldCreate(){
+  const btn = document.getElementById('yBtn'), err = document.getElementById('yErr');
+  err.style.display = 'none';
+  const body = {
+    label: document.getElementById('yLabel').value.trim() || null,
+    parcel_id: document.getElementById('yPid').value.trim() || null,
+    geometry_wkt: document.getElementById('yWkt').value.trim() || null,
+    crop_type: document.getElementById('yCrop').value,
+    season_year: parseInt(document.getElementById('yYear').value, 10),
+    date_from: document.getElementById('yFrom').value || null,
+    date_to: document.getElementById('yTo').value || null,
+    reported_yield_t_ha: parseFloat(document.getElementById('yYield').value),
+  };
+  if(!body.reported_yield_t_ha){ err.textContent = t('y_err_yield'); err.style.display = 'block'; return; }
+  btn.disabled = true; btn.textContent = t('y_running');
+  try{
+    const r = await fetch('/api/yield/mvi', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if(!r.ok) throw new Error(Array.isArray(d.detail) ? (d.detail[0]?.msg || r.status) : (d.detail || r.status));
+    await loadYieldList();
+    showYieldMap(d.id);
+  }catch(e){ err.textContent = trServer(e.message); err.style.display = 'block'; }
+  finally{ btn.disabled = false; btn.textContent = t('y_btn'); }
+}
+
+async function loadYieldList(){
+  const el = document.getElementById('yieldList');
+  try{
+    const r = await fetch('/api/yield/maps');
+    const maps = await r.json();
+    if(!maps.length){ el.innerHTML = `<p class="empty-hint">${esc(t('y_none'))}</p>`; return; }
+    el.innerHTML = `<table style="width:100%;font-size:12px;border-collapse:collapse">
+      <tr style="color:var(--muted)"><th style="text-align:left">${esc(t('y_label'))}</th><th>${esc(t('y_crop'))}</th><th>${esc(t('y_period'))}</th>
+        <th>${esc(t('y_reported'))}</th><th>CV</th><th></th></tr>
+      ${maps.map(m => `<tr style="border-top:1px solid #EEF1EA">
+        <td style="padding:4px 0">${esc(m.label || m.parcel_id || ('#' + m.id))}</td>
+        <td style="text-align:center">${esc(m.crop_type)}</td>
+        <td style="text-align:center">${esc(m.date_from)} – ${esc(m.date_to)}</td>
+        <td style="text-align:center">${m.reported_yield_t_ha} t/ha</td>
+        <td style="text-align:center">${m.stats ? m.stats.cv_pct + '%' : (m.status === 'error' ? '⚠' : '…')}</td>
+        <td style="text-align:right;white-space:nowrap">
+          ${m.status === 'done' ? `<button class="secondary" style="font-size:11px;padding:2px 8px" type="button" onclick="showYieldMap(${m.id})">${esc(t('y_show'))}</button>` : `<span class="hint" title="${esc(m.error || '')}">${esc(t('y_failed'))}</span>`}
+          <button class="secondary" style="font-size:11px;padding:2px 6px" type="button" onclick="yieldDelete(${m.id})">✕</button></td>
+      </tr>`).join('')}</table>`;
+  }catch(e){ el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`; }
+}
+
+async function showYieldMap(id){
+  initYieldMap();
+  const r = await fetch(`/api/yield/map/${id}`);
+  const m = await r.json();
+  if(!r.ok || !m.stats) return;
+  const s = m.stats, b = s.bounds;
+  yieldLayer.clearLayers();
+  const bounds = [[b[1], b[0]], [b[3], b[2]]];
+  L.imageOverlay(`/api/yield/map/${id}/overlay.png`, bounds, {opacity:0.85}).addTo(yieldLayer);
+  if(m.zones_geojson) L.geoJSON(m.zones_geojson, {style: f => ({color: '#222', weight: 0.6, fillOpacity: 0, opacity: 0.5}),
+    onEachFeature: (f, l) => l.bindTooltip(f.properties.label)}).addTo(yieldLayer);
+  const polys = parseWktPolygons(m.geometry_wkt);
+  if(polys.length) L.polygon(polys, {color:'#fff', weight:2, fill:false}).addTo(yieldLayer);
+  yieldMap.fitBounds(bounds, {padding:[20, 20], maxZoom:18});
+  document.getElementById('yMapTitle').textContent = `${t('y_map_h')}: ${m.label || m.parcel_id || ('#' + id)}`;
+  const zrows = s.zones.map(z => `<tr><td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${z.color};vertical-align:middle"></span> ${esc(z.label)}</td>
+      <td style="text-align:center">${z.area_ha} ha</td><td style="text-align:center">${z.share_pct}%</td>
+      <td style="text-align:center">${z.mean_yield_t_ha != null ? z.mean_yield_t_ha + ' t/ha' : '—'}</td></tr>`).join('');
+  document.getElementById('yieldDetail').innerHTML = `
+    <div>${esc(tf('y_summary', {rep: s.reported_yield_t_ha, mean: s.map_mean_yield_t_ha, p10: s.p10_t_ha, p90: s.p90_t_ha, cv: s.cv_pct, sc: s.median_scenes, ha: s.area_ha}))}</div>
+    ${s.high_variability ? `<div style="margin-top:6px;padding:6px 8px;background:var(--amber-light);border-radius:6px">⚠ ${esc(t('y_high_cv'))}</div>` : ''}
+    <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px">
+      <tr style="color:var(--muted)"><th style="text-align:left">${esc(t('y_zone'))}</th><th>${esc(t('y_area'))}</th><th>${esc(t('y_share'))}</th><th>${esc(t('y_mean'))}</th></tr>${zrows}</table>
+    <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+      <a class="secondary" style="font-size:12px" href="/api/yield/map/${id}/plon_mvi.tif">⬇ GeoTIFF</a>
+      <a class="secondary" style="font-size:12px" href="/api/yield/map/${id}/strefy.geojson">⬇ ${esc(t('y_zones_geojson'))}</a>
+    </div>`;
+}
+
+async function yieldDelete(id){
+  if(!confirm(t('y_confirm_del'))) return;
+  await fetch(`/api/yield/map/${id}`, {method:'DELETE'});
+  loadYieldList();
+}
 
 document.getElementById('tabWater').addEventListener('click', () => switchTab('water'));
 
@@ -3545,15 +3799,359 @@ async function renderWaterMap(fields){
   const statusByField = await loadWaterMapStatuses();
   let bounds = null;
   fields.forEach(f => {
-    const coords = parseWktPolygon(f.geometry_wkt);
-    if(!coords || coords.length < 3) return;
+    const polys = parseWktPolygons(f.geometry_wkt);
+    if(!polys.length) return;
+    const coords = polys.map(p => p[0]).flat();
     const color = waterStatusColor(statusByField[f.id]);
-    const poly = L.polygon(coords, {color, weight:2, fillColor:color, fillOpacity:0.35});
+    const poly = L.polygon(polys, {color, weight:2, fillColor:color, fillOpacity:0.35});
     poly.bindPopup(`<b>${esc(f.parcel_id)}</b><br>${f.irrigation_mode === 'irrigation' ? 'Irygacyjny' : 'Deszczowy'}${f.region ? (' · '+esc(f.region)) : ''}`);
     poly.addTo(waterFieldsLayer);
     bounds = bounds ? bounds.extend(coords) : L.latLngBounds(coords);
   });
   if(bounds) waterMap.fitBounds(bounds, {maxZoom:15, padding:[20,20]});
+}
+
+/* --- Okno mapy modułu wodnego -------------------------------------------
+ * Trzy sposoby wskazania pola:
+ *   polygon — klikasz kolejne narożniki pola (wierzchołki można przeciągać),
+ *   parcel  — klikasz w działkę, obrys pobiera się z ULDK (tylko Polska),
+ *             kilka kliknięć = pole z kilku działek,
+ *   pin     — pinezka w środku pola + kwadrat o zadanym boku (przybliżenie).
+ * Wyszukiwarka: współrzędne, numer działki TERYT albo miejscowość/adres
+ * (OpenStreetMap Nominatim). Domyślny podkład: zdjęcie satelitarne. */
+const WM = {target:null, map:null, mode:'polygon', verts:[], vertLayer:null, shape:null,
+            parcels:[], parcelLayer:null, pin:null, searchMarker:null};
+
+function wmInitMap(){
+  if(WM.map) return;
+  WM.map = L.map('wmMap', {maxZoom:20, doubleClickZoom:false});
+  const sat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    {maxZoom:20, maxNativeZoom:19, attribution:'Tiles © Esri — Esri, Maxar, Earthstar Geographics'});
+  const osm = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+    {maxZoom:20, maxNativeZoom:19, attribution:'© OpenStreetMap'});
+  const orto = L.tileLayer(
+    'https://mapy.geoportal.gov.pl/wss/service/PZGIK/ORTO/WMTS/StandardResolution?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=Raster&STYLE=default&FORMAT=image/jpeg&TILEMATRIXSET=EPSG:3857&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}',
+    {maxZoom:20, maxNativeZoom:19, attribution:'Ortofotomapa © GUGiK'});
+  sat.addTo(WM.map);
+  L.control.layers({[t('wm_layer_sat')]: sat, [t('layer_orto')]: orto, 'OpenStreetMap': osm}).addTo(WM.map);
+  WM.vertLayer = L.layerGroup().addTo(WM.map);
+  WM.parcelLayer = L.layerGroup().addTo(WM.map);
+  WM.map.on('click', wmOnClick);
+  WM.map.setView([52.1, 19.3], 6);
+}
+
+/* Cel okna mapy: pola formularza, do których trafia wynik. Domyślnie
+ * formularz modułu wodnego; zakładka stref plonu podaje własne pola
+ * (bez pinezki — tam potrzebny jest prawdziwy obrys). */
+const WM_TARGET_WATER = {pid:'waterPid', wkt:'waterGeomWkt', pin:true};
+function wmOpen(target){
+  const tgt = target || WM_TARGET_WATER;
+  const reset = WM.target && WM.target.wkt !== tgt.wkt;
+  WM.target = tgt;
+  document.getElementById('wmModePin').style.display = tgt.pin ? '' : 'none';
+  if(!tgt.pin && WM.mode === 'pin') WM.mode = 'polygon';
+  if(reset && WM.map) wmClear();
+  document.getElementById('wmModal').hidden = false;
+  document.body.style.overflow = 'hidden';
+  wmInitMap();
+  setTimeout(() => {
+    WM.map.invalidateSize();
+    // Istniejący obrys z formularza -> do edycji jako wierzchołki.
+    const rings = parseWktRings(document.getElementById(WM.target.wkt).value);
+    if(rings.length && !WM.verts.length && !WM.parcels.length){
+      const ring = rings[0].slice();
+      if(ring.length > 1 && ring[0][0] === ring[ring.length-1][0] && ring[0][1] === ring[ring.length-1][1]) ring.pop();
+      WM.verts = ring.map(c => L.latLng(c[0], c[1]));
+      wmSetMode('polygon');
+      wmRedraw();
+      WM.map.fitBounds(L.latLngBounds(WM.verts), {maxZoom:17, padding:[30,30]});
+    } else {
+      wmSetMode(WM.mode);
+    }
+    document.getElementById('wmSearch').focus();
+  }, 60);
+  document.addEventListener('keydown', wmKey);
+}
+
+function wmClose(){
+  document.getElementById('wmModal').hidden = true;
+  document.body.style.overflow = '';
+  document.getElementById('wmResults').style.display = 'none';
+  document.removeEventListener('keydown', wmKey);
+}
+function wmKey(e){
+  if(e.key === 'Escape') wmClose();
+  if((e.ctrlKey || e.metaKey) && e.key === 'z'){ e.preventDefault(); wmUndo(); }
+}
+
+function wmSetMode(mode){
+  WM.mode = mode;
+  ['Polygon','Parcel','Pin'].forEach(m =>
+    document.getElementById('wmMode'+m).classList.toggle('on', m.toLowerCase() === mode));
+  document.getElementById('wmMap').classList.toggle('wm-draw', mode !== 'pin');
+  document.getElementById('wmSource').style.display = mode === 'parcel' ? '' : 'none';
+  wmUpdateInfo();
+}
+
+async function wmOnClick(e){
+  document.getElementById('wmResults').style.display = 'none';
+  if(WM.mode === 'polygon'){
+    WM.verts.push(e.latlng);
+    wmRedraw();
+  } else if(WM.mode === 'pin'){
+    if(WM.pin) WM.pin.setLatLng(e.latlng);
+    else { WM.pin = L.marker(e.latlng, {draggable:true}).addTo(WM.map);
+           WM.pin.on('dragend', wmUpdateInfo); }
+    wmUpdateInfo();
+  } else if(WM.mode === 'parcel'){
+    wmInfo(t('wm_parcel_loading'));
+    WM.map.getContainer().style.cursor = 'progress';
+    try{
+      const src = document.getElementById('wmSource').value;
+      const r = await fetch(`/api/water/field_at?lat=${e.latlng.lat}&lon=${e.latlng.lng}&source=${src}`);
+      const data = await r.json();
+      if(!r.ok) throw new Error(data.detail || r.status);
+      // Klucz zaznaczenia: numer działki (ULDK) albo identyfikator pola FTW.
+      wmToggleParcel({...data, parcel_id: data.parcel_id || data.ftw_id});
+    }catch(err){ wmInfo('⚠ ' + err.message); }
+    finally{ WM.map.getContainer().style.cursor = ''; }
+  }
+}
+
+function wmToggleParcel(p){
+  const i = WM.parcels.findIndex(x => x.parcel_id === p.parcel_id);
+  if(i >= 0) WM.parcels.splice(i, 1); else WM.parcels.push(p);
+  wmRenderParcels();
+}
+function wmRenderParcels(){
+  WM.parcelLayer.clearLayers();
+  WM.parcels.forEach(x => {
+    const ftw = x.source === 'ftw';
+    const tip = ftw ? tf('wm_ftw_tip', {year: x.year, conf: x.confidence, ha: x.area_ha}) : x.parcel_id;
+    const polys = parseWktPolygons(x.geometry_wkt);
+    if(polys.length) L.polygon(polys, {color: ftw ? '#1E88E5' : '#E8590C', weight:2, fillOpacity:0.25})
+      .bindTooltip(tip).addTo(WM.parcelLayer);
+  });
+  if(WM.parcels.some(x => x.source === 'ftw') && !WM.ftwAttr){
+    WM.map.attributionControl.addAttribution('Obrysy pól: <a href="https://fieldsofthe.world" target="_blank" rel="noopener">Fields of The World</a> (CC-BY-4.0)');
+    WM.ftwAttr = true;
+  }
+  wmUpdateInfo();
+}
+
+function wmRedraw(){
+  WM.vertLayer.clearLayers();
+  if(WM.shape){ WM.map.removeLayer(WM.shape); WM.shape = null; }
+  if(WM.verts.length >= 2){
+    WM.shape = (WM.verts.length >= 3 ? L.polygon : L.polyline)(WM.verts,
+      {color:'#E8590C', weight:2, fillOpacity:0.2, interactive:false}).addTo(WM.map);
+  }
+  WM.verts.forEach((ll, idx) => {
+    const m = L.marker(ll, {draggable:true, icon:L.divIcon({className:'', html:'<div class="wm-vertex"></div>', iconSize:[12,12], iconAnchor:[6,6]})});
+    m.on('drag', ev => { WM.verts[idx] = ev.target.getLatLng(); if(WM.shape) WM.shape.setLatLngs(WM.verts); });
+    m.on('dragend', wmUpdateInfo);
+    m.on('click', ev => L.DomEvent.stopPropagation(ev));
+    m.addTo(WM.vertLayer);
+  });
+  wmUpdateInfo();
+}
+
+function wmUndo(){
+  if(WM.mode === 'polygon' && WM.verts.length){ WM.verts.pop(); wmRedraw(); }
+  else if(WM.mode === 'parcel' && WM.parcels.length){ wmToggleParcel(WM.parcels[WM.parcels.length-1]); }
+  else if(WM.mode === 'pin' && WM.pin){ WM.map.removeLayer(WM.pin); WM.pin = null; wmUpdateInfo(); }
+}
+function wmClear(){
+  WM.verts = []; wmRedraw();
+  WM.parcels = []; WM.parcelLayer.clearLayers();
+  if(WM.pin){ WM.map.removeLayer(WM.pin); WM.pin = null; }
+  wmUpdateInfo();
+}
+
+/* Powierzchnia wielokąta [ha] — rzut równoodległościowy wokół środka;
+ * dokładność rzędu ułamka procenta dla pól do kilku km. */
+function wmAreaHa(latlngs){
+  if(latlngs.length < 3) return 0;
+  const lat0 = latlngs.reduce((a, p) => a + p.lat, 0) / latlngs.length * Math.PI / 180;
+  const R = 6371008.8;
+  const pts = latlngs.map(p => [p.lng * Math.PI / 180 * R * Math.cos(lat0), p.lat * Math.PI / 180 * R]);
+  let a = 0;
+  for(let i = 0; i < pts.length; i++){ const j = (i + 1) % pts.length; a += pts[i][0]*pts[j][1] - pts[j][0]*pts[i][1]; }
+  return Math.abs(a) / 2 / 10000;
+}
+
+function wmInfo(text){ document.getElementById('wmInfo').textContent = text; }
+function wmUpdateInfo(){
+  let txt = '', ok = false;
+  if(WM.mode === 'polygon'){
+    ok = WM.verts.length >= 3;
+    txt = ok ? tf('wm_info_polygon_ok', {n: WM.verts.length, ha: wmAreaHa(WM.verts).toFixed(2)})
+             : tf('wm_info_polygon', {n: WM.verts.length});
+  } else if(WM.mode === 'parcel'){
+    ok = WM.parcels.length > 0;
+    const ha = WM.parcels.reduce((a, p) => a + (p.area_ha || 0), 0);
+    txt = ok ? tf('wm_info_parcel_ok', {n: WM.parcels.length, ha: ha.toFixed(2),
+                 ids: WM.parcels.map(p => p.parcel_id).join(', ')})
+             : t('wm_info_parcel');
+  } else {
+    ok = !!WM.pin;
+    const side = parseFloat(document.getElementById('waterGeomSide').value) || 100;
+    txt = ok ? tf('wm_info_pin_ok', {lat: WM.pin.getLatLng().lat.toFixed(5), lon: WM.pin.getLatLng().lng.toFixed(5), side})
+             : t('wm_info_pin');
+  }
+  wmInfo(txt);
+  document.getElementById('wmUseBtn').disabled = !ok;
+}
+
+function wmUse(){
+  const wktEl = document.getElementById(WM.target.wkt);
+  const pidEl = document.getElementById(WM.target.pid);
+  if(WM.mode === 'polygon' && WM.verts.length >= 3){
+    const ring = WM.verts.concat([WM.verts[0]]);
+    wktEl.value = 'POLYGON((' + ring.map(p => p.lng.toFixed(7)+' '+p.lat.toFixed(7)).join(', ') + '))';
+  } else if(WM.mode === 'parcel' && WM.parcels.length){
+    if(WM.parcels.every(p => p.source !== 'ftw')){
+      // Same działki ULDK: numery do pola ID — serwer sam pobierze i połączy
+      // obrysy (poprawna suma geometrii, także dla działek przylegających).
+      pidEl.value = WM.parcels.map(p => p.parcel_id).join(', ');
+      wktEl.value = '';
+    } else {
+      // Pola z FTW (albo mieszane): obrys wprost do WKT; ID pola nadaje użytkownik.
+      // Po ponownym otwarciu mapy obrys da się poprawić w trybie „Obrys pola”.
+      wktEl.value = joinWktPolygons(WM.parcels.map(p => p.geometry_wkt));
+      if(!pidEl.value.trim()) pidEl.focus();
+    }
+  } else if(WM.mode === 'pin' && WM.pin && WM.target.pin){
+    const ll = WM.pin.getLatLng();
+    document.getElementById('waterGeomLat').value = ll.lat.toFixed(6);
+    document.getElementById('waterGeomLon').value = ll.lng.toFixed(6);
+    waterGenSquareWkt();
+  } else return;
+  wmClose();
+}
+
+async function wmSearch(){
+  const q = document.getElementById('wmSearch').value.trim();
+  const res = document.getElementById('wmResults');
+  res.style.display = 'none';
+  if(!q) return;
+  const coord = q.match(/^\s*(-?\d+(?:[.,]\d+)?)\s*[,; ]\s*(-?\d+(?:[.,]\d+)?)\s*$/);
+  if(coord){
+    const lat = parseFloat(coord[1].replace(',', '.')), lon = parseFloat(coord[2].replace(',', '.'));
+    WM.map.setView([lat, lon], 17);
+    wmSearchMarker([lat, lon], q);
+    return;
+  }
+  if(/^\d{6}_\d\.\d{4}\.\S+/.test(q)){
+    wmInfo(t('wm_parcel_loading'));
+    try{
+      const r = await fetch('/api/water/parcel_lookup?ids=' + encodeURIComponent(q));
+      const data = await r.json();
+      if(!r.ok) throw new Error(data.detail || r.status);
+      wmSetMode('parcel');
+      const ids = (data.parcels || []).map(p => p.parcel_id).join(', ');
+      if(!WM.parcels.find(x => x.parcel_id === ids))
+        WM.parcels.push({parcel_id: ids, source: 'uldk', geometry_wkt: data.geometry_wkt, area_ha: data.area_ha});
+      wmRenderParcels();
+      const rings = parseWktRings(data.geometry_wkt);
+      if(rings.length) WM.map.fitBounds(L.latLngBounds(rings.flat()), {maxZoom:18, padding:[30,30]});
+    }catch(err){ wmInfo('⚠ ' + err.message); }
+    return;
+  }
+  try{
+    const r = await fetch('https://nominatim.openstreetmap.org/search?format=json&limit=6&accept-language='
+      + encodeURIComponent(currentLang || 'pl') + '&q=' + encodeURIComponent(q));
+    const items = await r.json();
+    if(!items.length){ wmInfo(t('wm_not_found')); return; }
+    if(items.length === 1){ wmGoTo(items[0]); return; }
+    res.innerHTML = items.map((it, i) => `<div data-i="${i}">${esc(it.display_name)}</div>`).join('');
+    res.querySelectorAll('div').forEach(d => d.onclick = () => { res.style.display = 'none'; wmGoTo(items[+d.dataset.i]); });
+    res.style.display = 'block';
+  }catch(err){ wmInfo('⚠ ' + t('wm_search_err')); }
+}
+
+function wmGoTo(it){
+  const bb = (it.boundingbox || []).map(Number);
+  if(bb.length === 4) WM.map.fitBounds([[bb[0], bb[2]], [bb[1], bb[3]]], {maxZoom:17});
+  else WM.map.setView([+it.lat, +it.lon], 16);
+  wmSearchMarker([+it.lat, +it.lon], it.display_name);
+}
+function wmSearchMarker(ll, label){
+  if(WM.searchMarker) WM.map.removeLayer(WM.searchMarker);
+  WM.searchMarker = L.circleMarker(ll, {radius:6, color:'#1E88E5', weight:2, fillOpacity:0.6, interactive:false})
+    .bindTooltip(label).addTo(WM.map);
+}
+
+/* WKT (POLYGON / MULTIPOLYGON) -> lista wielokątów, każdy jako lista
+ * pierścieni [[lat, lon], ...] (pierwszy = obrys, kolejne = dziury) —
+ * format, który L.polygon przyjmuje wprost (także z dziurami). */
+function parseWktPolygons(wkt){
+  const s = String(wkt || '').trim();
+  const start = s.indexOf('(');
+  if(start < 0 || !/^(MULTI)?POLYGON/i.test(s)) return [];
+  let i = start;
+  function list(){
+    i++;  // '('
+    const items = [];
+    let tok = '';
+    const flush = () => {
+      const parts = tok.trim().split(/\s+/).map(Number);
+      if(parts.length >= 2 && !parts.some(isNaN)) items.push([parts[1], parts[0]]);
+      tok = '';
+    };
+    while(i < s.length){
+      const ch = s[i];
+      if(ch === '('){ items.push(list()); continue; }
+      if(ch === ')'){ if(tok.trim()) flush(); i++; return items; }
+      if(ch === ','){ if(tok.trim()) flush(); i++; continue; }
+      tok += ch; i++;
+    }
+    return items;
+  }
+  try{
+    const tree = list();
+    const polys = /^MULTI/i.test(s) ? tree : [tree];
+    return polys.filter(p => Array.isArray(p) && p.length && p[0].length >= 3);
+  }catch(e){ return []; }
+}
+/* Same pierścienie zewnętrzne — do granic mapy i edycji wierzchołków. */
+function parseWktRings(wkt){ return parseWktPolygons(wkt).map(p => p[0]); }
+
+/* Kilka WKT -> jeden WKT (POLYGON albo MULTIPOLYGON) z zachowaniem dziur. */
+function joinWktPolygons(wkts){
+  const parts = [];
+  wkts.forEach(w => parseWktPolygons(w).forEach(poly => parts.push(poly)));
+  const ring = r => '(' + r.map(c => c[1].toFixed(7)+' '+c[0].toFixed(7)).join(', ') + ')';
+  const poly = p => '(' + p.map(ring).join(', ') + ')';
+  if(!parts.length) return '';
+  return parts.length === 1 ? 'POLYGON' + poly(parts[0]) : 'MULTIPOLYGON(' + parts.map(poly).join(', ') + ')';
+}
+
+/* Import wielu pól z GeoJSON / CSV (POST /api/water/field/import). */
+async function waterImport(btn){
+  const out = document.getElementById('waterImportOut');
+  const file = document.getElementById('waterImportFile').files[0];
+  if(!file){ out.textContent = t('w_import_nofile'); return; }
+  btn.disabled = true; out.textContent = t('w_import_running');
+  try{
+    const content = await file.text();
+    const body = {filename: file.name, content,
+      irrigation_mode: document.querySelector('input[name=waterMode]:checked').value};
+    const region = document.getElementById('waterRegion').value.trim();
+    const crop = document.getElementById('waterCrop').value.trim();
+    if(region) body.region = region;
+    if(crop) body.crop_type = crop;
+    const r = await fetch('/api/water/field/import', {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const data = await r.json();
+    if(!r.ok) throw new Error(Array.isArray(data.detail) ? (data.detail[0]?.msg || r.status) : (data.detail || r.status));
+    const errs = (data.errors || []).map(e => `<li>${esc(e.parcel_id)}: ${esc(trServer(e.error))}</li>`).join('');
+    out.innerHTML = `${esc(tf('w_import_done', {a: data.added.length, s: data.skipped.length, e: data.errors.length}))}`
+      + (errs ? `<ul class="hint" style="margin:4px 0 0 16px;padding:0">${errs}</ul>` : '');
+    loadWaterFieldList();
+  }catch(err){
+    out.textContent = '⚠ ' + err.message;
+  }finally{ btn.disabled = false; }
 }
 
 function waterGenSquareWkt(){
@@ -3585,13 +4183,16 @@ async function waterFieldAdd(){
   const parcel_id = document.getElementById('waterPid').value.trim();
   const geometry_wkt = document.getElementById('waterGeomWkt').value.trim();
   if(!parcel_id){ err.textContent = t('w_err_pid'); err.style.display = 'block'; return; }
-  if(!geometry_wkt){ err.textContent = t('w_err_geom'); err.style.display = 'block'; return; }
+  const isPlParcel = parcel_id.split(/[,;\s]+/).filter(Boolean).every(x => /^\d{6}_\d\.\d{4}\.\S+$/.test(x));
+  if(!geometry_wkt && !isPlParcel){ err.textContent = t('w_err_geom'); err.style.display = 'block'; return; }
   btn.disabled = true; btn.textContent = t('btn_adding');
   try{
     const body = {
-      parcel_id, geometry_wkt,
+      parcel_id,
       irrigation_mode: document.querySelector('input[name=waterMode]:checked').value,
     };
+    if(geometry_wkt) body.geometry_wkt = geometry_wkt;
+    if(document.getElementById('waterSplit').checked) body.split_parcels = true;
     const region = document.getElementById('waterRegion').value.trim();
     const crop   = document.getElementById('waterCrop').value.trim();
     if(crop) body.crop_type = crop;
@@ -3614,8 +4215,14 @@ async function waterFieldAdd(){
       throw new Error(detailMsg);
     }
     ok.style.display = 'block';
+    if(Array.isArray(data.added)){
+      ok.textContent = tf('w_split_ok', {n: data.added.length, s: (data.skipped_existing || []).length});
+    } else {
+      ok.textContent = t('w_add_ok');
+    }
     document.getElementById('waterPid').value = '';
     document.getElementById('waterGeomWkt').value = '';
+    if(typeof WM !== 'undefined' && WM.map) wmClear();
     loadWaterFieldList();
   }catch(ex){
     err.textContent = ex.message; err.style.display = 'block';
@@ -3624,21 +4231,124 @@ async function waterFieldAdd(){
   }
 }
 
-function renderWaterSparkline(obs, key, width=260, height=50){
-  const pts = (obs || []).filter(o => o[key] != null);
-  if(pts.length < 2)
-    return `<svg width="${width}" height="${height}"><text x="4" y="26" font-size="10" fill="#9AA598">${esc(t('w_spark_few'))}</text></svg>`;
-  const vals = pts.map(o => o[key]);
-  const mn = Math.min(...vals), mx = Math.max(...vals);
-  const pad = (mx - mn) * 0.15 || Math.abs(mn * 0.1) || 0.01;
-  const lo = mn - pad, hi = mx + pad;
-  const xStep = (width - 8) / Math.max(pts.length - 1, 1);
-  const yScale = v => height - 4 - ((v - lo) / (hi - lo)) * (height - 8);
-  const linePts = pts.map((o, i) => `${(4 + i * xStep).toFixed(1)},${yScale(o[key]).toFixed(1)}`).join(' ');
-  return `<svg width="${width}" height="${height}" style="display:block">
-    <polyline points="${linePts}" fill="none" stroke="#2F6FA8" stroke-width="2"
-      stroke-linejoin="round" stroke-linecap="round"/>
-  </svg>`;
+const waterHistoryCharts = {};
+
+const waterAlarmMarks = {
+  id: 'waterAlarmMarks',
+  beforeDatasetsDraw(c){
+    const ds = (c.data.datasets || []).find(d => d.alarmMarks);
+    if(!ds || !ds.data.length) return;
+    const {ctx, chartArea, scales:{x}} = c;
+    if(!x || !chartArea) return;
+    ctx.save();
+    ds.data.forEach(p => {
+      const px = x.getPixelForValue(new Date(p.x + 'T00:00:00'));
+      if(px < chartArea.left || px > chartArea.right) return;
+      ctx.strokeStyle = p.color;
+      ctx.globalAlpha = p.faded ? 0.35 : 0.75;
+      ctx.setLineDash([3, 3]);
+      ctx.lineWidth = 1.25;
+      ctx.beginPath();
+      ctx.moveTo(px, chartArea.top);
+      ctx.lineTo(px, chartArea.bottom);
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+};
+if(typeof Chart !== 'undefined' && !Chart.registry.plugins.get('waterAlarmMarks')){
+  Chart.register(waterAlarmMarks);
+}
+
+function destroyWaterChart(fieldId){
+  const c = waterHistoryCharts[fieldId];
+  if(c){ c.destroy(); delete waterHistoryCharts[fieldId]; }
+}
+
+function waterSeriesPts(obs, key){
+  return (obs || []).filter(o => o.obs_date && o[key] != null && isFinite(Number(o[key])))
+    .map(o => ({x: o.obs_date, y: Number(o[key])}));
+}
+
+function waterAlarmPoints(observations, alarms){
+  const ndmiByDate = {};
+  (observations || []).forEach(o => {
+    if(o.obs_date && o.ndwi_mean != null && isFinite(Number(o.ndwi_mean)))
+      ndmiByDate[o.obs_date] = Number(o.ndwi_mean);
+  });
+  const rank = {confirmed: 3, needs_visit: 2, pending: 2, rejected: 0};
+  const groups = {};
+  (alarms || []).forEach(a => {
+    if(!a || !a.obs_date) return;
+    (groups[a.obs_date] ||= []).push(a);
+  });
+  return Object.entries(groups).map(([date, list]) => {
+    const top = list.slice().sort((a, b) => (rank[b.triage_status] || 1) - (rank[a.triage_status] || 1))[0];
+    const y = ndmiByDate[date] != null ? ndmiByDate[date]
+      : (top.ndwi_value != null && isFinite(Number(top.ndwi_value)) ? Number(top.ndwi_value) : null);
+    return {
+      x: date, y,
+      color: top.triage_status === 'confirmed' ? '#8B2E1F'
+        : top.triage_status === 'rejected' ? '#9AA598' : '#C97A1D',
+      faded: top.triage_status === 'rejected',
+      labels: list.map(a => waterRiskLabel(a.risk_type)),
+    };
+  }).filter(p => p.y != null);
+}
+
+function drawWaterHistoryChart(fieldId, observations, alarms){
+  destroyWaterChart(fieldId);
+  const canvas = document.getElementById(`waterChart_${fieldId}`);
+  if(!canvas || typeof Chart === 'undefined') return;
+  const ndmi = waterSeriesPts(observations, 'ndwi_mean');
+  const ndvi = waterSeriesPts(observations, 'ndvi_mean');
+  const marks = waterAlarmPoints(observations, alarms);
+  const dates = ndmi.map(p => p.x).concat(ndvi.map(p => p.x), marks.map(p => p.x)).sort();
+  if(!dates.length) return;
+  const spanDays = Math.round((new Date(dates[dates.length - 1]) - new Date(dates[0])) / 86400000);
+  const pad = d => { const x = new Date(d + 'T00:00:00'); x.setDate(x.getDate() + (spanDays < 14 ? 2 : 4)); return x; };
+  const minD = pad(dates[0]); minD.setDate(minD.getDate() - (spanDays < 14 ? 4 : 8));
+  const datasets = [];
+  if(ndmi.length) datasets.push({
+    label: 'NDMI', data: ndmi, borderColor: '#2F6FA8', backgroundColor: '#2F6FA8',
+    pointRadius: 3, tension: 0.25, spanGaps: true,
+  });
+  if(ndvi.length) datasets.push({
+    label: 'NDVI', data: ndvi, borderColor: '#2F7A46', backgroundColor: '#2F7A46',
+    pointRadius: 2, borderWidth: 1.4, tension: 0.25, spanGaps: true,
+  });
+  if(marks.length) datasets.push({
+    alarmMarks: true, label: t('w_chart_alarm'), type: 'scatter', data: marks,
+    pointStyle: 'triangle', pointRadius: 7, pointHoverRadius: 8,
+    pointBackgroundColor: marks.map(p => p.color),
+    pointBorderColor: '#fff', pointBorderWidth: 1, showLine: false,
+  });
+  waterHistoryCharts[fieldId] = new Chart(canvas, {
+    type: 'line',
+    data: {datasets},
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: false,
+      scales: {
+        x: {type: 'time', min: minD, max: pad(dates[dates.length - 1]),
+            time: {tooltipFormat: 'yyyy-MM-dd',
+                   unit: spanDays > 160 ? 'month' : (spanDays > 40 ? 'week' : 'day'),
+                   displayFormats: {day: 'd MMM', week: 'd MMM', month: 'MMM yyyy'}},
+            ticks: {maxRotation: 0, autoSkip: true, font: {size: 10}},
+            grid: {display: false}},
+        y: {grace: '18%', ticks: {font: {size: 10}}, grid: {color: 'rgba(0,0,0,.06)'}},
+      },
+      plugins: {
+        legend: {position: 'bottom', labels: {boxWidth: 10, font: {size: 11}, padding: 8}},
+        tooltip: {callbacks: {
+          label(c){
+            if(c.dataset.alarmMarks) return (c.raw.labels || []).map(s => '⚠ ' + s);
+            if(c.parsed.y == null) return '';
+            return `${c.dataset.label} ${Number(c.parsed.y).toFixed(3)}`;
+          }
+        }}
+      }
+    }
+  });
 }
 
 function renderWaterFieldCard(f){
@@ -3690,6 +4400,7 @@ function renderWaterFieldCard(f){
 }
 
 async function loadWaterFieldList(){
+  Object.keys(waterHistoryCharts).forEach(destroyWaterChart);
   const el = document.getElementById('waterFieldList');
   try{
     const r = await fetch('/api/water/field/list?status=active');
@@ -3747,10 +4458,34 @@ function renderWaterBalance(fieldId, s){
       <div style="position:absolute;left:${rawPct}%;top:-3px;bottom:-3px;width:2px;background:#555" title="RAW"></div>
     </div>
     ${sugg}
+    ${renderWaterWeatherCtx(s)}
     ${s.initial_state_reliable === false ? `<div class="hint" style="margin-top:4px">${esc(t('w_bal_lowconf'))}</div>` : ''}
     ${notes ? `<ul class="hint" style="margin:6px 0 0 16px;padding:0">${notes}</ul>` : ''}
     <div class="hint" style="margin-top:4px">${esc(trServer(s.calibration_status || ''))}</div>
+    <div class="hint" style="margin-top:2px;font-size:10.5px">${esc(s.attribution || '')}</div>
   </div>`;
+}
+
+/* Prognoza 7 dni, bilans 30 dni na tle normy 1991–2020, wilgotność gleby ERA5-Land. */
+function renderWaterWeatherCtx(s){
+  const rows = [];
+  const fc = s.forecast;
+  if(fc){
+    let txt = tf('w_fc_line', {n: fc.days, p: Math.round(fc.precip_mm), e: Math.round(fc.et0_mm)});
+    if(fc.tmax_c != null) txt += tf('w_fc_tmax', {t: Math.round(fc.tmax_c)});
+    if(fc.vpd_max_kpa != null) txt += tf('w_fc_vpd', {v: fc.vpd_max_kpa.toFixed(1)});
+    rows.push(`<div>🌤️ ${esc(txt)}${fc.dry_hot ? ` <b style="color:#B3261E">${esc(t('w_fc_dryhot'))}</b>` : ''}</div>`);
+  }
+  if(s.cwb_30d_pct != null){
+    const cls = s.cwb_30d_pct <= 20 ? '#B3261E' : (s.cwb_30d_pct >= 80 ? '#1E6FB0' : 'inherit');
+    rows.push(`<div>📊 ${esc(tf('w_clim_line', {mm: Math.round(s.cwb_30d_mm), pct: Math.round(s.cwb_30d_pct)}))}
+      <b style="color:${cls}">${esc(trServer(s.cwb_30d_class || ''))}</b></div>`);
+  }
+  if(s.soil_moisture){
+    const sm = s.soil_moisture, f = v => v == null ? '—' : Math.round(v * 100) + '%';
+    rows.push(`<div>🌱 ${esc(tf('w_sm_line', {a: f(sm.sm_0_7), b: f(sm.sm_7_28), c: f(sm.sm_28_100), d: sm.date}))}</div>`);
+  }
+  return rows.length ? `<div style="margin-top:8px;display:grid;gap:3px">${rows.join('')}</div>` : '';
 }
 
 async function waterBalanceToPlan(fieldId, plannedDate, btn){
@@ -3774,7 +4509,9 @@ async function waterBackfill(fieldId, btn){
   const el = document.getElementById(`waterReplay_${fieldId}`);
   try{
     const r = await fetch(`/api/water/field/${fieldId}/backfill`, {method:'POST',
-      headers:{'Content-Type':'application/json'}, body: JSON.stringify({days: 90})});
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({
+        date_from: document.getElementById(`waterBfFrom_${fieldId}`).value || null,
+        date_to: document.getElementById(`waterBfTo_${fieldId}`).value || null})});
     const data = await r.json();
     if(!r.ok) throw new Error(data.detail || (t('w_err')+' '+r.status));
     loadWaterDetails(fieldId);
@@ -3796,18 +4533,134 @@ async function waterReplay(fieldId, btn){
     const data = await r.json();
     if(!r.ok) throw new Error(data.detail || (t('w_err')+' '+r.status));
     const s = data.summary || {};
+    const rr = await fetch(`/api/water/replay_ratings?water_field_id=${fieldId}`);
+    const ratings = rr.ok ? await rr.json() : [];
+    const ratingOf = (d, rt) => (ratings.find(x => x.obs_date === d && x.risk_type === rt) || {}).rating;
+    const rateBtns = a => {
+      const cur = ratingOf(a.obs_date, a.risk_type);
+      const b = (val, label) => `<button class="secondary" type="button" style="font-size:10.5px;padding:2px 7px;${cur === val ? 'background:var(--green-deep);color:#fff' : ''}"
+        onclick="waterRateReplay(${fieldId}, '${esc(a.obs_date)}', '${esc(a.risk_type)}', '${val}', this)">${label}</button>`;
+      return `<div style="display:flex;gap:4px;white-space:nowrap">${b('confirmed', '✓ ' + esc(t('w_rate_ok')))}${b('rejected', '✗ ' + esc(t('w_rate_bad')))}</div>`;
+    };
     const rows = (data.alarms || []).map(a => `<tr style="vertical-align:top"><td style="white-space:nowrap;padding-right:8px">${esc(a.obs_date)}</td>
-      <td style="padding-right:8px">${esc(waterRiskLabel(a.risk_type))}</td><td>${esc(trServer(a.message_pl))}</td></tr>`).join('');
+      <td style="padding-right:8px">${esc(waterRiskLabel(a.risk_type))}</td><td style="padding-right:8px">${esc(trServer(a.message_pl))}</td>
+      <td>${rateBtns(a)}</td></tr>`).join('');
+    const obsDates = (data.rows || []).map(x => x.obs_date);
+    const missedList = ratings.filter(x => x.rating === 'missed').map(x => esc(x.obs_date)).join(', ');
+    const missedForm = obsDates.length ? `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span>${esc(t('w_missed_q'))}</span>
+        <select id="waterMissed_${fieldId}" style="font-size:12px;border:1px solid var(--line);border-radius:6px;padding:3px 6px;width:auto">
+          ${obsDates.map(d => `<option value="${esc(d)}">${esc(d)}</option>`).join('')}</select>
+        <button class="secondary" type="button" style="font-size:11px;padding:2px 8px"
+          onclick="waterRateReplay(${fieldId}, document.getElementById('waterMissed_${fieldId}').value, '', 'missed', this)">${esc(t('w_missed_btn'))}</button>
+        ${missedList ? `<span class="hint">${esc(t('w_missed_list'))} ${missedList}</span>` : ''}
+      </div>` : '';
     el.innerHTML = `<div style="border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:12px;font-size:12px">
       <b>${esc(t('w_replay_h'))}</b> · ${esc(tf('w_replay_sum', {n: s.observations || 0,
         a: s.alarms_total || 0, ph: s.phenology_suppressed || 0}))}
       <table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:6px">
         ${rows || '<tr><td style="color:var(--muted);padding:6px 0">'+esc(t('w_replay_none'))+'</td></tr>'}
       </table>
-      <div class="hint" style="margin-top:4px">${esc(t('w_replay_note'))}</div></div>`;
+      ${missedForm}
+      <div class="hint" style="margin-top:4px">${esc(t('w_replay_note'))} ${esc(t('w_rate_hint'))}</div></div>`;
   }catch(e){
     el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
   }finally{ btn.disabled = false; btn.textContent = orig; }
+}
+
+/* --- Deszczomierz rolnika: odczyty zastępują opad z modelu w bilansie --- */
+function renderRainGauge(fieldId, rain){
+  const rows = (rain || []).slice(-10).reverse().map(r => `<tr>
+      <td>${esc(r.reading_date)}</td><td style="text-align:center">${r.precip_mm} mm</td>
+      <td style="text-align:right"><button class="secondary" style="font-size:10px;padding:2px 6px" type="button"
+        onclick="waterRainDelete(${fieldId},${r.id})">✕</button></td></tr>`).join('');
+  return `<div style="margin-top:14px">
+    <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">${esc(t('w_rain_h'))} —
+      <span class="hint" style="font-weight:400">${esc(t('w_rain_note'))}</span></div>
+    <div class="row2" style="margin-bottom:6px">
+      <input type="date" id="waterRainDate_${fieldId}">
+      <input type="number" step="0.1" min="0" max="500" id="waterRainMm_${fieldId}" placeholder="${esc(t('w_rain_ph'))}">
+    </div>
+    <button class="secondary" style="font-size:12px" type="button" onclick="waterRainAdd(${fieldId})">${esc(t('w_add_entry'))}</button>
+    <div class="error" id="waterRainErr_${fieldId}" style="margin-top:6px"></div>
+    <table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:8px">
+      ${rows || '<tr><td style="text-align:center;color:var(--muted);padding:8px 0">'+esc(t('w_rain_none'))+'</td></tr>'}
+    </table></div>`;
+}
+
+async function waterRainAdd(fieldId){
+  const err = document.getElementById(`waterRainErr_${fieldId}`);
+  err.style.display = 'none';
+  const reading_date = document.getElementById(`waterRainDate_${fieldId}`).value;
+  const mm = document.getElementById(`waterRainMm_${fieldId}`).value;
+  if(!reading_date || mm === ''){ err.textContent = t('w_rain_err'); err.style.display = 'block'; return; }
+  try{
+    const r = await fetch(`/api/water/field/${fieldId}/rain`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify({reading_date, precip_mm: parseFloat(mm)})});
+    const data = await r.json();
+    if(!r.ok) throw new Error(Array.isArray(data.detail) ? (data.detail[0]?.msg || r.status) : (data.detail || r.status));
+    loadWaterDetails(fieldId);
+  }catch(e){ err.textContent = e.message; err.style.display = 'block'; }
+}
+
+async function waterRainDelete(fieldId, readingId){
+  await fetch(`/api/water/rain/${readingId}`, {method:'DELETE'});
+  loadWaterDetails(fieldId);
+}
+
+function waterIsoDaysAgo(n){
+  const d = new Date(Date.now() - n * 86400000);
+  return d.toISOString().slice(0, 10);
+}
+
+/* Ocena wyniku powtórki: trafny / fałszywy alarm albo przeoczony problem. */
+async function waterRateReplay(fieldId, obsDate, riskType, rating, btn){
+  btn.disabled = true;
+  try{
+    const r = await fetch(`/api/water/field/${fieldId}/replay_rating`, {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({obs_date: obsDate, rating, risk_type: riskType || null})});
+    const data = await r.json();
+    if(!r.ok) throw new Error(Array.isArray(data.detail) ? (data.detail[0]?.msg || r.status) : (data.detail || r.status));
+    const replayBtn = [...document.querySelectorAll(`#waterDetails_${fieldId} button`)]
+      .find(b => b.textContent === t('w_replay'));
+    if(replayBtn) waterReplay(fieldId, replayBtn);
+  }catch(e){ btn.disabled = false; alert(e.message); }
+}
+
+/* Sugestia progu z ocen powtórki + zastosowanie (operator). */
+async function waterCalSuggest(btn){
+  const out = document.getElementById('waterCalOut');
+  btn.disabled = true;
+  try{
+    const r = await fetch('/api/water/calibration/suggest_from_replay');
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || r.status);
+    const blocked = (d.blocked_by_other_rules || []).map(b => `${esc(b.obs_date)} (z=${b.z_ndmi})`).join(', ');
+    if(d.status !== 'ok'){
+      out.innerHTML = esc(tf('w_cal_nodata', {p: d.positives, n: d.negatives, mp: d.min_positives, mn: d.min_negatives}))
+        + (blocked ? `<div class="hint" style="margin-top:4px">${esc(t('w_cal_blocked'))} ${blocked}</div>` : '');
+      return;
+    }
+    const c = d.at_current, sg = d.at_suggested;
+    out.innerHTML = `<div>${esc(tf('w_cal_res', {cur: d.current_threshold, sug: d.suggested_threshold, p: d.positives, n: d.negatives}))}</div>
+      <table style="font-size:11.5px;margin-top:6px;border-collapse:collapse">
+        <tr style="color:var(--muted)"><th></th><th style="padding:0 8px">${esc(t('w_cal_tp'))}</th><th style="padding:0 8px">${esc(t('w_cal_fp'))}</th><th style="padding:0 8px">${esc(t('w_cal_fn'))}</th><th style="padding:0 8px">F1</th></tr>
+        <tr><td>${esc(t('w_cal_now'))} (${c.threshold})</td><td style="text-align:center">${c.tp}</td><td style="text-align:center">${c.fp}</td><td style="text-align:center">${c.fn}</td><td style="text-align:center">${c.f1}</td></tr>
+        <tr><td>${esc(t('w_cal_new'))} (${sg.threshold})</td><td style="text-align:center">${sg.tp}</td><td style="text-align:center">${sg.fp}</td><td style="text-align:center">${sg.fn}</td><td style="text-align:center">${sg.f1}</td></tr>
+      </table>
+      ${blocked ? `<div class="hint" style="margin-top:4px">${esc(t('w_cal_blocked'))} ${blocked}</div>` : ''}
+      ${d.suggested_threshold !== d.current_threshold ? `<button class="secondary" type="button" style="font-size:12px;margin-top:8px"
+        onclick="waterCalApply(${d.suggested_threshold}, this)">${esc(tf('w_cal_apply', {v: d.suggested_threshold}))}</button>` : ''}`;
+  }catch(e){ out.textContent = '⚠ ' + e.message; }
+  finally{ btn.disabled = false; }
+}
+
+async function waterCalApply(value, btn){
+  btn.disabled = true;
+  const r = await fetch('/api/water/calibration/apply', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify({new_threshold: value})});
+  btn.textContent = r.ok ? '✓ ' + t('w_cal_applied') : '⚠ ' + r.status;
 }
 
 async function waterFieldCheckNow(fieldId, btn){
@@ -3863,7 +4716,10 @@ function renderWaterDetails(fieldId, events, observations, plans){
     </tr>`).join('');
 
   return `
-    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px;align-items:center">
+      <span class="hint">${esc(t('w_bf_range'))}</span>
+      <input type="date" id="waterBfFrom_${fieldId}" value="${waterIsoDaysAgo(90)}" style="font-size:12px;width:auto;padding:5px 8px">
+      <input type="date" id="waterBfTo_${fieldId}" value="${waterIsoDaysAgo(0)}" style="font-size:12px;width:auto;padding:5px 8px">
       <button class="secondary" style="font-size:12px" type="button"
         onclick="waterBackfill(${fieldId}, this)">${esc(t('w_backfill'))}</button>
       <button class="secondary" style="font-size:12px" type="button"
@@ -3872,7 +4728,9 @@ function renderWaterDetails(fieldId, events, observations, plans){
     <div id="waterReplay_${fieldId}"></div>
     <div style="margin-bottom:14px">
       <div style="font-size:12.5px;font-weight:600;margin-bottom:6px">${esc(t('w_ndwi_h'))}</div>
-      ${renderWaterSparkline(observations, 'ndwi_mean')}
+      ${(observations || []).some(o => o.ndwi_mean != null || o.ndvi_mean != null)
+        ? `<div style="position:relative;height:200px;margin-bottom:4px"><canvas id="waterChart_${fieldId}"></canvas></div>`
+        : `<div class="hint" style="margin-bottom:6px">${esc(t('w_spark_few'))}</div>`}
       <table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:6px">
         <tr style="color:var(--muted)">
           <th style="text-align:left;font-weight:500">${esc(t('w_th_date'))}</th><th>NDMI</th><th>VV (dB)</th><th>${esc(t('w_th_precip'))}</th></tr>
@@ -3947,15 +4805,21 @@ async function loadWaterDetails(fieldId){
   const el = document.getElementById(`waterDetails_${fieldId}`);
   el.innerHTML = `<p class="empty-hint">${esc(t('w_loading'))}</p>`;
   try{
-    const [obsR, evR, planR] = await Promise.all([
+    const [obsR, evR, planR, rainR, alarmR] = await Promise.all([
       fetch(`/api/water/field/${fieldId}/observations`),
       fetch(`/api/water/field/${fieldId}/irrigation`),
       fetch(`/api/water/field/${fieldId}/plan`),
+      fetch(`/api/water/field/${fieldId}/rain`),
+      fetch('/api/water/triage_queue?status=all'),
     ]);
     const observations = await obsR.json();
     const events = await evR.json();
     const plans = await planR.json();
-    el.innerHTML = renderWaterDetails(fieldId, events, observations, plans);
+    const rain = rainR.ok ? await rainR.json() : [];
+    const alarms = alarmR.ok ? (await alarmR.json()).filter(a => a.water_field_id === fieldId) : [];
+    destroyWaterChart(fieldId);
+    el.innerHTML = renderWaterDetails(fieldId, events, observations, plans) + renderRainGauge(fieldId, rain);
+    drawWaterHistoryChart(fieldId, observations, alarms);
   }catch(e){
     el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
   }
@@ -4157,6 +5021,17 @@ const TRANSLATIONS = {
     tab_batch:   'Wiele działek naraz',
     tab_monitor: 'Monitoring sezonu',
     tab_water:   'Moduł wodny',
+    tab_yield: 'Strefy plonu', y_high_cv: 'Zmienność mapy przekracza 30% — mapy z kombajnu mają zwykle 10–25%. Metoda prawdopodobnie przesadza z różnicami: ufaj podziałowi na strefy (gdzie lepiej / gorzej), a wartości t/ha traktuj orientacyjnie.', y_form_h: 'Nowa mapa stref plonu (MVI)',
+    y_intro: 'Plon zgłoszony przez rolnika dla całego pola rozkładamy na piksele 10 m według wigoru i wilgotności łanu w sezonie (MVI = mediana EVI2 × 75. percentyl NDMI, Sentinel-2). Średnia mapy = plon zgłoszony.',
+    y_label: 'Nazwa mapy', y_label_ph: 'np. LENs-07 kukurydza 2026', y_pid: 'Numer działki', y_pid_hint: '(TERYT; kilka sąsiednich — po przecinku)',
+    y_geom: 'Obrys pola (WKT)', y_map_pick: 'Zaznacz pole na mapie', y_crop: 'Uprawa', y_year: 'Sezon (rok)', y_from: 'Okres od', y_to: 'do',
+    y_window_hint: 'Okres podpowiada się dla uprawy (faza, w której łan najlepiej różnicuje plon) — możesz go zmienić.',
+    y_yield: 'Plon zgłoszony przez rolnika [t/ha]', y_btn: 'Policz mapę stref', y_running: 'Liczę mapę (Sentinel-2)...',
+    y_err_yield: 'Podaj plon w t/ha.', y_map_h: 'Mapa stref', y_list_h: 'Zapisane mapy', y_none: 'Brak map — policz pierwszą.',
+    y_period: 'okres', y_reported: 'plon zgłoszony', y_show: 'Pokaż', y_failed: 'błąd', y_confirm_del: 'Usunąć tę mapę?',
+    y_summary: 'Plon zgłoszony {rep} t/ha (średnia mapy {mean}) · 10–90% pola: {p10}–{p90} t/ha · zmienność (CV) {cv}% · scen na piksel: {sc} · {ha} ha',
+    y_zone: 'Strefa (względem średniej)', y_area: 'Powierzchnia', y_share: 'Udział', y_mean: 'Plon w strefie', y_zones_geojson: 'Strefy (GeoJSON)',
+    y_caveat: 'MVI zwalidowano na kukurydzy i soi w USA (Landsat). Dla polskich upraw traktuj mapę jako względną (gdzie w polu lepiej / gorzej) do czasu porównania z mapą plonu z kombajnu.',
     lang_btn:    '🌐 EN',
 
     // formularz pojedynczy
@@ -4381,6 +5256,17 @@ const TRANSLATIONS = {
     tab_batch:   'Multiple parcels',
     tab_monitor: 'Season monitoring',
     tab_water:   'Water module',
+    tab_yield: 'Yield zones', y_high_cv: 'Map variability exceeds 30% — combine yield maps usually show 10–25%. The method probably exaggerates differences: trust the zoning (better / worse areas), treat t/ha values as indicative.', y_form_h: 'New yield zone map (MVI)',
+    y_intro: 'The yield reported by the farmer for the whole field is distributed to 10 m pixels by canopy vigour and moisture over the season (MVI = median EVI2 × 75th percentile NDMI, Sentinel-2). The map mean equals the reported yield.',
+    y_label: 'Map name', y_label_ph: 'e.g. LENs-07 maize 2026', y_pid: 'Parcel number', y_pid_hint: '(TERYT; several adjacent — comma separated)',
+    y_geom: 'Field outline (WKT)', y_map_pick: 'Mark the field on the map', y_crop: 'Crop', y_year: 'Season (year)', y_from: 'Period from', y_to: 'to',
+    y_window_hint: 'The period is suggested for the crop (stage when the canopy best differentiates yield) — you can change it.',
+    y_yield: 'Yield reported by the farmer [t/ha]', y_btn: 'Compute zone map', y_running: 'Computing map (Sentinel-2)...',
+    y_err_yield: 'Enter the yield in t/ha.', y_map_h: 'Zone map', y_list_h: 'Saved maps', y_none: 'No maps yet — compute the first one.',
+    y_period: 'period', y_reported: 'reported yield', y_show: 'Show', y_failed: 'error', y_confirm_del: 'Delete this map?',
+    y_summary: 'Reported yield {rep} t/ha (map mean {mean}) · 10–90% of field: {p10}–{p90} t/ha · variability (CV) {cv}% · scenes per pixel: {sc} · {ha} ha',
+    y_zone: 'Zone (vs mean)', y_area: 'Area', y_share: 'Share', y_mean: 'Yield in zone', y_zones_geojson: 'Zones (GeoJSON)',
+    y_caveat: 'MVI was validated on maize and soybean in the USA (Landsat). For other crops treat the map as relative (better / worse parts of the field) until compared with a combine yield map.',
     lang_btn:    '🌐 PL',
 
     card_data:        'Verification data',
@@ -4594,6 +5480,17 @@ const TRANSLATIONS = {
     tab_batch:   'Più particelle',
     tab_monitor: 'Monitoraggio stagionale',
     tab_water:   'Modulo idrico',
+    tab_yield: 'Zone di resa', y_high_cv: 'La variabilità supera il 30% — le mappe da mietitrebbia di solito mostrano 10–25%. Il metodo probabilmente esagera le differenze: fidati della suddivisione in zone, considera i valori t/ha indicativi.', y_form_h: 'Nuova mappa delle zone di resa (MVI)',
+    y_intro: 'La resa dichiarata dall’agricoltore per l’intero campo viene distribuita sui pixel da 10 m secondo vigore e umidità della coltura nella stagione (MVI = mediana EVI2 × 75° percentile NDMI, Sentinel-2). La media della mappa è uguale alla resa dichiarata.',
+    y_label: 'Nome mappa', y_label_ph: 'es. LENs-07 mais 2026', y_pid: 'Numero di particella', y_pid_hint: '(TERYT; più particelle adiacenti — separate da virgola)',
+    y_geom: 'Contorno del campo (WKT)', y_map_pick: 'Segna il campo sulla mappa', y_crop: 'Coltura', y_year: 'Stagione (anno)', y_from: 'Periodo dal', y_to: 'al',
+    y_window_hint: 'Il periodo viene suggerito per la coltura (fase in cui la chioma differenzia meglio la resa) — puoi modificarlo.',
+    y_yield: 'Resa dichiarata [t/ha]', y_btn: 'Calcola la mappa', y_running: 'Calcolo della mappa (Sentinel-2)...',
+    y_err_yield: 'Indica la resa in t/ha.', y_map_h: 'Mappa delle zone', y_list_h: 'Mappe salvate', y_none: 'Nessuna mappa — calcola la prima.',
+    y_period: 'periodo', y_reported: 'resa dichiarata', y_show: 'Mostra', y_failed: 'errore', y_confirm_del: 'Eliminare questa mappa?',
+    y_summary: 'Resa dichiarata {rep} t/ha (media mappa {mean}) · 10–90% del campo: {p10}–{p90} t/ha · variabilità (CV) {cv}% · scene per pixel: {sc} · {ha} ha',
+    y_zone: 'Zona (rispetto alla media)', y_area: 'Superficie', y_share: 'Quota', y_mean: 'Resa nella zona', y_zones_geojson: 'Zone (GeoJSON)',
+    y_caveat: 'MVI è stato validato su mais e soia negli USA (Landsat). Per altre colture considera la mappa come relativa (zone migliori / peggiori) fino al confronto con una mappa di resa della mietitrebbia.',
     lang_btn:    '🌐 PL',
 
     card_data:        'Dati di verifica',
@@ -4899,7 +5796,7 @@ const EXTRA_I18N = {
     w_fields_h: 'Pola w module wodnym', w_fields_loading: 'Ładowanie listy pól...',
     w_ph_pid: 'np. 141201_1.0001.6509 albo UZB-Samarkand-12', w_ph_region: 'np. Dolny Śląsk / Samarkand',
     w_ph_lat: 'szer. geogr. (lat), np. 51.101', w_ph_lon: 'dł. geogr. (lon), np. 17.031', w_ph_side: 'bok kwadratu w metrach',
-    w_err_pid: 'Wpisz ID pola', w_err_geom: 'Podaj geometrię (WKT) — wpisz ręcznie albo wygeneruj kwadrat z lat/lon powyżej',
+    w_err_pid: 'Wpisz ID pola', w_err_geom: 'Podaj geometrię: zaznacz pole na mapie, wklej WKT albo wpisz polski numer działki',
     w_val_err: 'Błąd walidacji', w_err: 'Błąd', w_spark_few: 'za mało danych do wykresu',
     w_region_missing: 'region nie podany', w_events_n: 'Zdarzeń nawodnienia w logu: {n}',
     w_check_now: 'Sprawdź teraz', w_checking: 'Sprawdzam (Sentinel Hub)...', w_history: 'Historia i log nawodnienia',
@@ -4910,9 +5807,41 @@ const EXTRA_I18N = {
     w_bal_stress: 'Stres wodny', w_bal_approach: 'Zbliża się próg stresu', w_bal_ok: 'Woda dostępna',
     w_bal_used: 'zużyto {d} mm (próg stresu {raw} mm, pojemność {taw} mm)',
     w_bal_sugg: 'Sugerowane nawodnienie: {date}, ok. {mm} mm ({m3} m³/ha).', w_bal_to_plan: 'Dodaj do planu',
+    w_bf_range: 'Okres:', w_rate_ok: 'trafny', w_rate_bad: 'fałszywy',
+    w_missed_q: 'Przeoczony problem (był, a alarmu nie było):', w_missed_btn: 'Zapisz', w_missed_list: 'zapisane:',
+    w_rate_hint: 'Twoje oceny służą do kalibracji progu.',
+    w_cal_h: 'Kalibracja progu z ocenionej powtórki', w_cal_btn: 'Policz sugestię progu',
+    w_cal_hint: 'Oceń alarmy w „Powtórce na historii” (trafny / fałszywy) i dopisz przeoczone problemy. Sugestia progu uwzględnia oba rodzaje błędów.',
+    w_cal_nodata: 'Za mało ocen: trafnych+przeoczonych {p} (potrzeba {mp}), fałszywych {n} (potrzeba {mn}).',
+    w_cal_res: 'Obecny próg z-score: {cur} · sugerowany: {sug} (ocen: {p} problemów, {n} fałszywych alarmów)',
+    w_cal_tp: 'trafne', w_cal_fp: 'fałszywe', w_cal_fn: 'przeoczone', w_cal_now: 'obecnie', w_cal_new: 'po zmianie',
+    w_cal_blocked: 'Przeoczone mimo przekroczenia progu (zablokowała je inna reguła — próg tego nie naprawi):',
+    w_cal_apply: 'Zastosuj próg {v}', w_cal_applied: 'zastosowano', w_split: 'Każda działka jako osobne pole (gdy wpisujesz kilka numerów)', w_split_ok: '✅ Dodano pól: {n} (pominięto już istniejące: {s})',
+    w_fc_line: 'Prognoza {n} dni: opad {p} mm, parowanie {e} mm', w_fc_tmax: ', Tmax do {t} °C', w_fc_vpd: ', VPD do {v} kPa',
+    w_fc_dryhot: 'sucho i gorąco', w_clim_line: 'Bilans opad−parowanie 30 dni: {mm} mm — {pct}. percentyl lat 1991–2020:',
+    w_sm_line: 'Wilgotność gleby wg modelu ERA5-Land: 0–7 cm {a}, 7–28 cm {b}, 28–100 cm {c} ({d})',
+    w_rain_h: 'Deszczomierz rolnika', w_rain_note: 'odczyty zastępują opad z modelu pogodowego w bilansie wodnym',
+    w_rain_ph: 'opad [mm]', w_rain_none: 'Brak odczytów.', w_rain_err: 'Podaj datę i opad w mm.',
+    w_pid_hint: '(polski numer działki TERYT — obrys pobierze się sam; kilka działek oddziel przecinkiem)',
+    w_geom_opt: '(niepotrzebna dla polskich działek)', w_map_pick: 'Zaznacz na mapie (pinezka, obrys albo działka)',
+    w_import_h: 'Import wielu pól z pliku', w_import_btn: 'Importuj',
+    w_import_hint: '(GeoJSON albo CSV z kolumną wkt; dla polskich działek wystarczy kolumna parcel_id. Tryb, region i uprawa z formularza są domyślne.)',
+    w_import_nofile: 'Wybierz plik GeoJSON albo CSV.', w_import_running: 'Importuję (dla działek pobieram obrysy z ULDK)...',
+    w_import_done: 'Dodano: {a}, pominięto (już w module): {s}, błędy: {e}.',
+    wm_title: 'Zaznacz pole na mapie', wm_search_ph: 'Szukaj: miejscowość, adres, współrzędne (51.10, 17.03) lub nr działki',
+    wm_search_btn: 'Szukaj', wm_mode_polygon: 'Obrys pola', wm_mode_parcel: 'Gotowe obrysy', wm_mode_pin: 'Pinezka',
+    wm_undo: 'Cofnij', wm_clear: 'Wyczyść', wm_cancel: 'Anuluj', wm_src_auto: 'PL: działki ewidencyjne · poza PL: pola z satelity', wm_src_ftw: 'Pola z satelity (FTW) — także w PL', wm_ftw_tip: 'Pole z satelity (FTW {year}), pewność {conf}%, {ha} ha', wm_use: 'Użyj', wm_layer_sat: 'Satelita',
+    wm_info_polygon: 'Klikaj kolejne narożniki pola (punktów: {n}, potrzeba min. 3). Punkty można przeciągać; Ctrl+Z cofa.',
+    wm_info_polygon_ok: 'Obrys: {n} punktów, ok. {ha} ha. Dodaj kolejne narożniki albo kliknij „Użyj”.',
+    wm_info_parcel: 'Kliknij w pole — w Polsce pobierze się działka z ULDK, w Azji Środkowej pole z mapy satelitarnej Fields of The World (do kilku sekund). Kilka kliknięć = pole z kilku części; ponowne kliknięcie usuwa część. Obrys FTW to wynik modelu — sprawdź go na zdjęciu.',
+    wm_info_parcel_ok: 'Wybrane obrysy ({n}, ok. {ha} ha): {ids}',
+    wm_info_pin: 'Kliknij w środek pola. Obrys zostanie przybliżony kwadratem o boku z formularza.',
+    wm_info_pin_ok: 'Pinezka: {lat}, {lon} — kwadrat {side} m. Pinezkę można przeciągnąć.',
+    wm_parcel_loading: 'Szukam obrysu pola (ULDK / Fields of The World, do kilku sekund)...', wm_not_found: 'Nie znaleziono takiego miejsca.',
+    wm_search_err: 'Wyszukiwarka niedostępna — spróbuj współrzędnych.',
     w_risk_balance: 'Deficyt wody wg bilansu (FAO-56)',
-    w_backfill: 'Uzupełnij historię (90 dni)', w_backfill_running: 'Pobieram historię...',
-    w_backfill_confirm: 'Pobrać dane satelitarne z ostatnich 90 dni dla tego pola? (zużywa PU Sentinel Hub)',
+    w_backfill: 'Uzupełnij historię', w_backfill_running: 'Pobieram historię...',
+    w_backfill_confirm: 'Pobrać dane satelitarne z wybranego okresu dla tego pola? (zużywa PU Sentinel Hub)',
     w_backfill_done: 'Scen: {scenes}, czystych: {clean}, dopisanych obserwacji: {stored}.',
     w_replay: 'Powtórka na historii', w_replay_running: 'Liczę...', w_replay_h: 'Powtórka (suchy przebieg)',
     w_replay_sum: 'obserwacji {n}, alarmów {a}, spadków wyjaśnionych fenologią {ph}',
@@ -4922,6 +5851,7 @@ const EXTRA_I18N = {
     w_bal_lowconf: 'Niska pewność: w oknie nie było większego opadu ani nawodnienia — stan początkowy profilu jest założony.',
     w_bal_plan_note: 'Termin zasugerowany przez bilans wodny (FAO-56).', w_risk_uni_irr: 'Nierównomierne nawodnienie pola', w_risk_uni: 'Nierównomierna wilgotność w polu', w_risk_stress: 'Możliwy stres wodny', w_no_anomaly: 'Brak sygnału anomalii.',
     w_confirm_del: 'Dezaktywować to pole w module wodnym?', w_ndwi_h: 'NDMI — historia obserwacji',
+    w_chart_alarm: 'Alarm',
     w_th_date: 'data', w_th_precip: 'opady (mm)', w_no_obs: 'brak obserwacji', w_log_h: 'Log nawodnienia',
     w_m_drip: 'kroplowe', w_m_flood: 'zalewowe', w_m_sprinkle: 'deszczowanie',
     w_ph_amount: 'ilość / czas trwania', w_ph_unit: 'jednostka (mm, m³/ha, godz...)', w_add_entry: '+ Dodaj wpis',
@@ -5033,7 +5963,7 @@ const EXTRA_I18N = {
     w_fields_h: 'Fields in the water module', w_fields_loading: 'Loading the field list...',
     w_ph_pid: 'e.g. 141201_1.0001.6509 or UZB-Samarkand-12', w_ph_region: 'e.g. Lower Silesia / Samarkand',
     w_ph_lat: 'latitude, e.g. 51.101', w_ph_lon: 'longitude, e.g. 17.031', w_ph_side: 'square side in metres',
-    w_err_pid: 'Enter the field ID', w_err_geom: 'Provide a geometry (WKT) — type it or generate a square from lat/lon above',
+    w_err_pid: 'Enter the field ID', w_err_geom: 'Provide a geometry: mark the field on the map, paste WKT or enter a Polish parcel number',
     w_val_err: 'Validation error', w_err: 'Error', w_spark_few: 'not enough data for a chart',
     w_region_missing: 'region not set', w_events_n: 'Irrigation events in the log: {n}',
     w_check_now: 'Check now', w_checking: 'Checking (Sentinel Hub)...', w_history: 'History and irrigation log',
@@ -5044,9 +5974,41 @@ const EXTRA_I18N = {
     w_bal_stress: 'Water stress', w_bal_approach: 'Approaching stress threshold', w_bal_ok: 'Water available',
     w_bal_used: '{d} mm used (stress threshold {raw} mm, capacity {taw} mm)',
     w_bal_sugg: 'Suggested irrigation: {date}, about {mm} mm ({m3} m³/ha).', w_bal_to_plan: 'Add to plan',
+    w_bf_range: 'Period:', w_rate_ok: 'correct', w_rate_bad: 'false',
+    w_missed_q: 'Missed problem (it happened, no alert):', w_missed_btn: 'Save', w_missed_list: 'saved:',
+    w_rate_hint: 'Your ratings are used to calibrate the threshold.',
+    w_cal_h: 'Threshold calibration from rated replay', w_cal_btn: 'Compute threshold suggestion',
+    w_cal_hint: 'Rate alerts in “Replay on history” (correct / false) and add missed problems. The suggestion accounts for both error types.',
+    w_cal_nodata: 'Not enough ratings: correct+missed {p} (need {mp}), false {n} (need {mn}).',
+    w_cal_res: 'Current z-score threshold: {cur} · suggested: {sug} ({p} problems, {n} false alerts rated)',
+    w_cal_tp: 'correct', w_cal_fp: 'false', w_cal_fn: 'missed', w_cal_now: 'now', w_cal_new: 'after change',
+    w_cal_blocked: 'Missed although the threshold was exceeded (blocked by another rule — the threshold will not fix it):',
+    w_cal_apply: 'Apply threshold {v}', w_cal_applied: 'applied', w_split: 'Each parcel as a separate field (when entering several numbers)', w_split_ok: '✅ Fields added: {n} (skipped existing: {s})',
+    w_fc_line: '{n}-day forecast: rain {p} mm, evaporation {e} mm', w_fc_tmax: ', Tmax up to {t} °C', w_fc_vpd: ', VPD up to {v} kPa',
+    w_fc_dryhot: 'dry and hot', w_clim_line: '30-day rainfall−evaporation balance: {mm} mm — percentile {pct} of 1991–2020:',
+    w_sm_line: 'Soil moisture (ERA5-Land model): 0–7 cm {a}, 7–28 cm {b}, 28–100 cm {c} ({d})',
+    w_rain_h: 'Farmer rain gauge', w_rain_note: 'readings replace modelled rainfall in the water balance',
+    w_rain_ph: 'rain [mm]', w_rain_none: 'No readings.', w_rain_err: 'Enter the date and rainfall in mm.',
+    w_pid_hint: '(Polish TERYT parcel number — the outline is fetched automatically; separate several parcels with commas)',
+    w_geom_opt: '(not needed for Polish parcels)', w_map_pick: 'Mark on the map (pin, outline or parcel)',
+    w_import_h: 'Import many fields from a file', w_import_btn: 'Import',
+    w_import_hint: '(GeoJSON or CSV with a wkt column; for Polish parcels a parcel_id column is enough. Mode, region and crop from the form are defaults.)',
+    w_import_nofile: 'Choose a GeoJSON or CSV file.', w_import_running: 'Importing (fetching parcel outlines from ULDK)...',
+    w_import_done: 'Added: {a}, skipped (already in the module): {s}, errors: {e}.',
+    wm_title: 'Mark the field on the map', wm_search_ph: 'Search: place, address, coordinates (51.10, 17.03) or parcel number',
+    wm_search_btn: 'Search', wm_mode_polygon: 'Field outline', wm_mode_parcel: 'Ready outlines', wm_mode_pin: 'Pin',
+    wm_undo: 'Undo', wm_clear: 'Clear', wm_cancel: 'Cancel', wm_src_auto: 'PL: cadastral parcels · outside PL: satellite fields', wm_src_ftw: 'Satellite fields (FTW) — also in PL', wm_ftw_tip: 'Satellite field (FTW {year}), confidence {conf}%, {ha} ha', wm_use: 'Use', wm_layer_sat: 'Satellite',
+    wm_info_polygon: 'Click the field corners one by one ({n} points, at least 3 needed). Points can be dragged; Ctrl+Z undoes.',
+    wm_info_polygon_ok: 'Outline: {n} points, about {ha} ha. Add more corners or click “Use”.',
+    wm_info_parcel: 'Click a field — in Poland the ULDK parcel is fetched, in Central Asia the field from the Fields of The World satellite map (a few seconds). Several clicks = a field of several parts; clicking again removes a part. FTW outlines are model output — check them on the image.',
+    wm_info_parcel_ok: 'Selected outlines ({n}, about {ha} ha): {ids}',
+    wm_info_pin: 'Click the centre of the field. The outline will be approximated by a square with the side from the form.',
+    wm_info_pin_ok: 'Pin: {lat}, {lon} — square {side} m. The pin can be dragged.',
+    wm_parcel_loading: 'Looking up the field outline (ULDK / Fields of The World, a few seconds)...', wm_not_found: 'No such place found.',
+    wm_search_err: 'Search unavailable — try coordinates.',
     w_risk_balance: 'Water deficit per balance (FAO-56)',
-    w_backfill: 'Backfill history (90 days)', w_backfill_running: 'Fetching history...',
-    w_backfill_confirm: 'Fetch satellite data for the last 90 days for this field? (uses Sentinel Hub PU)',
+    w_backfill: 'Backfill history', w_backfill_running: 'Fetching history...',
+    w_backfill_confirm: 'Fetch satellite data for the selected period for this field? (uses Sentinel Hub PU)',
     w_backfill_done: 'Scenes: {scenes}, clear: {clean}, observations added: {stored}.',
     w_replay: 'Replay on history', w_replay_running: 'Computing...', w_replay_h: 'Replay (dry run)',
     w_replay_sum: '{n} observations, {a} alerts, {ph} drops explained by phenology',
@@ -5056,6 +6018,7 @@ const EXTRA_I18N = {
     w_bal_lowconf: 'Low confidence: no major rain or irrigation in the window — the initial soil state is assumed.',
     w_bal_plan_note: 'Date suggested by the water balance (FAO-56).', w_risk_uni_irr: 'Uneven irrigation across the field', w_risk_uni: 'Uneven moisture across the field', w_risk_stress: 'Possible water stress', w_no_anomaly: 'No anomaly signal.',
     w_confirm_del: 'Deactivate this field in the water module?', w_ndwi_h: 'NDMI — observation history',
+    w_chart_alarm: 'Alert',
     w_th_date: 'date', w_th_precip: 'rainfall (mm)', w_no_obs: 'no observations', w_log_h: 'Irrigation log',
     w_m_drip: 'drip', w_m_flood: 'flood', w_m_sprinkle: 'sprinkler',
     w_ph_amount: 'amount / duration', w_ph_unit: 'unit (mm, m³/ha, hours...)', w_add_entry: '+ Add entry',
@@ -5167,7 +6130,7 @@ const EXTRA_I18N = {
     w_fields_h: 'Campi nel modulo idrico', w_fields_loading: 'Caricamento elenco campi...',
     w_ph_pid: 'es. 141201_1.0001.6509 oppure UZB-Samarkand-12', w_ph_region: 'es. Bassa Slesia / Samarcanda',
     w_ph_lat: 'latitudine, es. 51.101', w_ph_lon: 'longitudine, es. 17.031', w_ph_side: 'lato del quadrato in metri',
-    w_err_pid: 'Inserisci l’ID del campo', w_err_geom: 'Indica la geometria (WKT) — scrivila o genera un quadrato da lat/lon sopra',
+    w_err_pid: 'Inserisci l’ID del campo', w_err_geom: 'Indica la geometria: segna il campo sulla mappa, incolla un WKT o inserisci un numero di particella polacco',
     w_val_err: 'Errore di validazione', w_err: 'Errore', w_spark_few: 'dati insufficienti per il grafico',
     w_region_missing: 'regione non indicata', w_events_n: 'Eventi di irrigazione nel registro: {n}',
     w_check_now: 'Verifica ora', w_checking: 'Verifica (Sentinel Hub)...', w_history: 'Storia e registro irriguo',
@@ -5178,9 +6141,41 @@ const EXTRA_I18N = {
     w_bal_stress: 'Stress idrico', w_bal_approach: 'Vicino alla soglia di stress', w_bal_ok: 'Acqua disponibile',
     w_bal_used: '{d} mm consumati (soglia di stress {raw} mm, capacità {taw} mm)',
     w_bal_sugg: 'Irrigazione suggerita: {date}, circa {mm} mm ({m3} m³/ha).', w_bal_to_plan: 'Aggiungi al piano',
+    w_bf_range: 'Periodo:', w_rate_ok: 'corretto', w_rate_bad: 'falso',
+    w_missed_q: 'Problema non segnalato (c’era, ma nessun avviso):', w_missed_btn: 'Salva', w_missed_list: 'salvati:',
+    w_rate_hint: 'Le tue valutazioni servono a calibrare la soglia.',
+    w_cal_h: 'Calibrazione della soglia dalla simulazione valutata', w_cal_btn: 'Calcola il suggerimento',
+    w_cal_hint: 'Valuta gli avvisi nella “Simulazione sullo storico” (corretto / falso) e aggiungi i problemi non segnalati. Il suggerimento considera entrambi i tipi di errore.',
+    w_cal_nodata: 'Valutazioni insufficienti: corretti+non segnalati {p} (servono {mp}), falsi {n} (servono {mn}).',
+    w_cal_res: 'Soglia z-score attuale: {cur} · suggerita: {sug} ({p} problemi, {n} falsi avvisi valutati)',
+    w_cal_tp: 'corretti', w_cal_fp: 'falsi', w_cal_fn: 'mancati', w_cal_now: 'ora', w_cal_new: 'dopo la modifica',
+    w_cal_blocked: 'Mancati pur superando la soglia (bloccati da un’altra regola — la soglia non li risolve):',
+    w_cal_apply: 'Applica soglia {v}', w_cal_applied: 'applicata', w_split: 'Ogni particella come campo separato (se inserisci più numeri)', w_split_ok: '✅ Campi aggiunti: {n} (saltati già presenti: {s})',
+    w_fc_line: 'Previsione {n} giorni: pioggia {p} mm, evaporazione {e} mm', w_fc_tmax: ', Tmax fino a {t} °C', w_fc_vpd: ', VPD fino a {v} kPa',
+    w_fc_dryhot: 'secco e caldo', w_clim_line: 'Bilancio pioggia−evaporazione 30 giorni: {mm} mm — {pct}° percentile 1991–2020:',
+    w_sm_line: 'Umidità del suolo (modello ERA5-Land): 0–7 cm {a}, 7–28 cm {b}, 28–100 cm {c} ({d})',
+    w_rain_h: 'Pluviometro dell’agricoltore', w_rain_note: 'le letture sostituiscono la pioggia del modello nel bilancio idrico',
+    w_rain_ph: 'pioggia [mm]', w_rain_none: 'Nessuna lettura.', w_rain_err: 'Indica data e pioggia in mm.',
+    w_pid_hint: '(numero di particella polacco TERYT — il contorno viene scaricato automaticamente; separa più particelle con virgole)',
+    w_geom_opt: '(non necessaria per le particelle polacche)', w_map_pick: 'Segna sulla mappa (puntina, contorno o particella)',
+    w_import_h: 'Importa più campi da file', w_import_btn: 'Importa',
+    w_import_hint: '(GeoJSON o CSV con colonna wkt; per le particelle polacche basta la colonna parcel_id. Modalità, regione e coltura del modulo sono predefinite.)',
+    w_import_nofile: 'Scegli un file GeoJSON o CSV.', w_import_running: 'Importazione (scarico i contorni da ULDK)...',
+    w_import_done: 'Aggiunti: {a}, saltati (già nel modulo): {s}, errori: {e}.',
+    wm_title: 'Segna il campo sulla mappa', wm_search_ph: 'Cerca: località, indirizzo, coordinate (51.10, 17.03) o numero di particella',
+    wm_search_btn: 'Cerca', wm_mode_polygon: 'Contorno del campo', wm_mode_parcel: 'Contorni pronti', wm_mode_pin: 'Puntina',
+    wm_undo: 'Annulla ultimo', wm_clear: 'Pulisci', wm_cancel: 'Annulla', wm_src_auto: 'PL: particelle catastali · fuori PL: campi da satellite', wm_src_ftw: 'Campi da satellite (FTW) — anche in PL', wm_ftw_tip: 'Campo da satellite (FTW {year}), affidabilità {conf}%, {ha} ha', wm_use: 'Usa', wm_layer_sat: 'Satellite',
+    wm_info_polygon: 'Clicca gli angoli del campo uno dopo l’altro ({n} punti, minimo 3). I punti si possono trascinare; Ctrl+Z annulla.',
+    wm_info_polygon_ok: 'Contorno: {n} punti, circa {ha} ha. Aggiungi altri angoli o clicca “Usa”.',
+    wm_info_parcel: 'Clicca su un campo — in Polonia viene scaricata la particella ULDK, in Asia centrale il campo dalla mappa satellitare Fields of The World (alcuni secondi). Più clic = campo di più parti; un nuovo clic rimuove la parte. I contorni FTW sono output di un modello — verificali sull’immagine.',
+    wm_info_parcel_ok: 'Contorni selezionati ({n}, circa {ha} ha): {ids}',
+    wm_info_pin: 'Clicca il centro del campo. Il contorno sarà approssimato da un quadrato con il lato indicato nel modulo.',
+    wm_info_pin_ok: 'Puntina: {lat}, {lon} — quadrato {side} m. La puntina si può trascinare.',
+    wm_parcel_loading: 'Cerco il contorno del campo (ULDK / Fields of The World, alcuni secondi)...', wm_not_found: 'Luogo non trovato.',
+    wm_search_err: 'Ricerca non disponibile — prova con le coordinate.',
     w_risk_balance: 'Deficit idrico da bilancio (FAO-56)',
-    w_backfill: 'Completa lo storico (90 giorni)', w_backfill_running: 'Scarico lo storico...',
-    w_backfill_confirm: 'Scaricare i dati satellitari degli ultimi 90 giorni per questo campo? (consuma PU di Sentinel Hub)',
+    w_backfill: 'Completa lo storico', w_backfill_running: 'Scarico lo storico...',
+    w_backfill_confirm: 'Scaricare i dati satellitari del periodo scelto per questo campo? (consuma PU di Sentinel Hub)',
     w_backfill_done: 'Scene: {scenes}, pulite: {clean}, osservazioni aggiunte: {stored}.',
     w_replay: 'Simulazione sullo storico', w_replay_running: 'Calcolo...', w_replay_h: 'Simulazione (a secco)',
     w_replay_sum: '{n} osservazioni, {a} avvisi, {ph} cali spiegati dalla fenologia',
@@ -5190,6 +6185,7 @@ const EXTRA_I18N = {
     w_bal_lowconf: 'Bassa affidabilità: nessuna pioggia o irrigazione rilevante nella finestra — lo stato iniziale del suolo è ipotizzato.',
     w_bal_plan_note: 'Data suggerita dal bilancio idrico (FAO-56).', w_risk_uni_irr: 'Irrigazione non uniforme nel campo', w_risk_uni: 'Umidità non uniforme nel campo', w_risk_stress: 'Possibile stress idrico', w_no_anomaly: 'Nessun segnale di anomalia.',
     w_confirm_del: 'Disattivare questo campo nel modulo idrico?', w_ndwi_h: 'NDMI — storia delle osservazioni',
+    w_chart_alarm: 'Allarme',
     w_th_date: 'data', w_th_precip: 'pioggia (mm)', w_no_obs: 'nessuna osservazione', w_log_h: 'Registro irriguo',
     w_m_drip: 'a goccia', w_m_flood: 'a sommersione', w_m_sprinkle: 'a pioggia',
     w_ph_amount: 'quantità / durata', w_ph_unit: 'unità (mm, m³/ha, ore...)', w_add_entry: '+ Aggiungi voce',
@@ -5279,6 +6275,36 @@ const SERVER_PHRASES = {
     ['niekalibrowane / wymaga walidacji terenowej', 'uncalibrated / needs field validation'],
     ['Brak wystarczających danych do oceny.', 'Not enough data for an assessment.'],
     ['Brak sygnału anomalii.', 'No anomaly signal.'],
+    ["Za mało pikseli z co najmniej", "Too few pixels with at least"],
+    ["czystymi scenami", "clear scenes"],
+    ["Wydłuż okres albo sprawdź zachmurzenie.", "Extend the period or check cloud cover."],
+    ["Średni MVI pola jest bardzo niski", "The field mean MVI is very low"],
+    ["— w wybranym okresie nie widać rozwiniętego łanu. Sprawdź uprawę i daty sezonu.", "— no developed canopy is visible in the chosen period. Check the crop and season dates."],
+    ["Podaj numer działki TERYT albo obrys pola (mapa / WKT).", "Enter a TERYT parcel number or a field outline (map / WKT)."],
+    ["Początek okresu musi być przed końcem.", "The start of the period must be before its end."],
+    ["ma rozpiętość ok.", "spans about"],
+    ["km — części leżą daleko od siebie, więc to raczej kilka osobnych pól niż jedno (dopuszczalne do", "km — its parts are far apart, so these are rather several separate fields than one (allowed up to"],
+    ["km). Dodaj je osobno: zaznacz „Każda działka jako osobne pole” albo użyj importu z pliku.", "km). Add them separately: tick “Each parcel as a separate field” or use the file import."],
+    ["jest już w module wodnym.", "is already in the water module."],
+    ["Usuń to pole z modułu i dodaj działki osobno.", "Remove this field from the module and add the parcels separately."],
+    ["wyjątkowo sucho", "exceptionally dry"],
+    ["wyjątkowo mokro", "exceptionally wet"],
+    ["w normie", "normal"],
+    [" Na tle lat 1991–2020 ostatnie 30 dni:", " Against 1991–2020 the last 30 days were:"],
+    ["percentyl bilansu opad−parowanie dla tej pory roku", "percentile of the rainfall−evaporation balance for this time of year"],
+    [" Wysokie zapotrzebowanie atmosfery (", " High atmospheric demand ("],
+    ["— przy takim upale rośliny zamykają aparaty szparkowe nawet przy wilgotnej glebie.", "— in such heat plants close their stomata even in moist soil."],
+    ["Spadek potwierdza też radar (Sentinel-1 VV).", "The drop is also confirmed by radar (Sentinel-1 VV)."],
+    ["Zapowiada się sucho i gorąco — zużycie wody wzrośnie.", "Dry and hot weather ahead — water use will increase."],
+    ["Brak zwartej okrywy roślinnej", "No closed plant cover"],
+    ["wilgotności łanu nie da się ocenić z satelity; o zapasie wody w glebie mówi bilans wodny.", "canopy moisture cannot be assessed from satellite; see the water balance for soil water."],
+    ["Brak sygnału stresu wodnego — gwałtowny spadek zieleni (NDVI", "No water-stress signal — a sharp drop in greenness (NDVI"],
+    ["względem historii pola) wygląda na zbiór, koszenie albo likwidację poplonu.", "vs the field history) looks like harvest, mowing or cover-crop termination."],
+    [": zapas łatwo dostępnej wody prawie wyczerpany (zużyto", ": readily available water is almost used up (used"],
+    [", a prognoza zapowiada suchy i gorący tydzień", ", and the forecast shows a dry, hot week"],
+    ["Opad z deszczomierza rolnika zastąpił opad z modelu w", "Rain-gauge readings replaced modelled rainfall on"],
+    [" dniach.", " days."],
+    [" dniu.", " day."],
     [": model bilansu wodnego wskazuje stres wodny (zużyto", ": the water-balance model indicates water stress (used"],
     [": według modelu bilansu wodnego próg stresu zostanie przekroczony", ": according to the water-balance model the stress threshold will be exceeded"],
     [" exceeded za ", " exceeded in "], ["jutro (", "tomorrow ("], ["dziś (", "today ("],
@@ -5392,6 +6418,36 @@ const SERVER_PHRASES = {
     ['niekalibrowane / wymaga walidacji terenowej', 'non calibrato / serve validazione in campo'],
     ['Brak wystarczających danych do oceny.', 'Dati insufficienti per la valutazione.'],
     ['Brak sygnału anomalii.', 'Nessun segnale di anomalia.'],
+    ["Za mało pikseli z co najmniej", "Troppi pochi pixel con almeno"],
+    ["czystymi scenami", "scene pulite"],
+    ["Wydłuż okres albo sprawdź zachmurzenie.", "Allunga il periodo o verifica la nuvolosità."],
+    ["Średni MVI pola jest bardzo niski", "L’MVI medio del campo è molto basso"],
+    ["— w wybranym okresie nie widać rozwiniętego łanu. Sprawdź uprawę i daty sezonu.", "— nel periodo scelto non si vede una coltura sviluppata. Verifica coltura e date."],
+    ["Podaj numer działki TERYT albo obrys pola (mapa / WKT).", "Indica un numero di particella TERYT o un contorno (mappa / WKT)."],
+    ["Początek okresu musi być przed końcem.", "L’inizio del periodo deve precedere la fine."],
+    ["ma rozpiętość ok.", "si estende per circa"],
+    ["km — części leżą daleko od siebie, więc to raczej kilka osobnych pól niż jedno (dopuszczalne do", "km — le parti sono lontane tra loro, quindi sono piuttosto più campi separati (consentito fino a"],
+    ["km). Dodaj je osobno: zaznacz „Każda działka jako osobne pole” albo użyj importu z pliku.", "km). Aggiungili separatamente: spunta “Ogni particella come campo separato” o usa l’importazione da file."],
+    ["jest już w module wodnym.", "è già nel modulo idrico."],
+    ["Usuń to pole z modułu i dodaj działki osobno.", "Rimuovi questo campo dal modulo e aggiungi le particelle separatamente."],
+    ["wyjątkowo sucho", "eccezionalmente secco"],
+    ["wyjątkowo mokro", "eccezionalmente umido"],
+    ["w normie", "nella norma"],
+    [" Na tle lat 1991–2020 ostatnie 30 dni:", " Rispetto al 1991–2020 gli ultimi 30 giorni:"],
+    ["percentyl bilansu opad−parowanie dla tej pory roku", "percentile del bilancio pioggia−evaporazione per questo periodo dell’anno"],
+    [" Wysokie zapotrzebowanie atmosfery (", " Elevata domanda atmosferica ("],
+    ["— przy takim upale rośliny zamykają aparaty szparkowe nawet przy wilgotnej glebie.", "— con questo caldo le piante chiudono gli stomi anche con suolo umido."],
+    ["Spadek potwierdza też radar (Sentinel-1 VV).", "Il calo è confermato anche dal radar (Sentinel-1 VV)."],
+    ["Zapowiada się sucho i gorąco — zużycie wody wzrośnie.", "Si prevede tempo secco e caldo — il consumo d’acqua aumenterà."],
+    ["Brak zwartej okrywy roślinnej", "Nessuna copertura vegetale chiusa"],
+    ["wilgotności łanu nie da się ocenić z satelity; o zapasie wody w glebie mówi bilans wodny.", "l’umidità della coltura non è valutabile da satellite; vedi il bilancio idrico."],
+    ["Brak sygnału stresu wodnego — gwałtowny spadek zieleni (NDVI", "Nessun segnale di stress idrico — un forte calo del verde (NDVI"],
+    ["względem historii pola) wygląda na zbiór, koszenie albo likwidację poplonu.", "rispetto alla storia del campo) sembra raccolta, sfalcio o terminazione della cover crop."],
+    [": zapas łatwo dostępnej wody prawie wyczerpany (zużyto", ": l’acqua facilmente disponibile è quasi esaurita (consumati"],
+    [", a prognoza zapowiada suchy i gorący tydzień", ", e la previsione indica una settimana secca e calda"],
+    ["Opad z deszczomierza rolnika zastąpił opad z modelu w", "Le letture del pluviometro hanno sostituito la pioggia del modello in"],
+    [" dniach.", " giorni."],
+    [" dniu.", " giorno."],
     [": model bilansu wodnego wskazuje stres wodny (zużyto", ": il modello di bilancio idrico indica stress idrico (consumati"],
     [": według modelu bilansu wodnego próg stresu zostanie przekroczony", ": secondo il modello di bilancio idrico la soglia di stress sarà superata"],
     [" superata za ", " superata tra "], ["jutro (", "domani ("], ["dziś (", "oggi ("],
@@ -5627,6 +6683,7 @@ function _syncChartLang(){
 function _syncVisibleLang(){
   document.title = t('doc_title');
   _setText('tabWater', 'tab_water');
+  _setText('tabYield', 'tab_yield');
   _setText('lbl_term_check', 'lbl_term_check');
   _setText('btnPdfLbl', 'btn_pdf');
   _setText('expertLayerLbl', 'expert_layers');

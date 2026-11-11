@@ -220,9 +220,70 @@ def describe_balance(summary: dict, irrigation_mode: str = "irrigation") -> str:
                 f"({summary['suggested_dose_m3_ha']:.0f} m³/ha).")
     elif summary.get("forecast_horizon_days"):
         msg += f" W prognozie na {summary['forecast_horizon_days']} dni próg stresu nie zostanie przekroczony."
+    fc = summary.get("forecast")
+    if fc:
+        msg += (f" Prognoza {fc['days']} dni: opad {fc['precip_mm']:.0f} mm, "
+                f"parowanie {fc['et0_mm']:.0f} mm")
+        if fc.get("tmax_c") is not None:
+            msg += f", Tmax do {fc['tmax_c']:.0f} °C"
+        msg += "."
+        if fc.get("dry_hot"):
+            msg += " Zapowiada się sucho i gorąco — zużycie wody wzrośnie."
+    if summary.get("cwb_30d_class"):
+        msg += (f" Ostatnie 30 dni na tle lat 1991–2020: {summary['cwb_30d_class']} "
+                f"({summary['cwb_30d_pct']:.0f}. percentyl).")
     if not summary.get("initial_state_reliable"):
         msg += " (Niska pewność: w oknie nie było większego opadu ani nawodnienia — stan początkowy profilu jest założony.)"
     return msg
+
+
+def apply_rain_gauge(weather: list, readings: list) -> int:
+    """Podmienia opad z modelu na odczyty deszczomierza rolnika (suma
+    odczytów z danego dnia). Siatka modelu (9-25 km) nie widzi lokalnych
+    burz — odczyt z pola jest lepszy. Zwraca liczbę podmienionych dni."""
+    by_day: dict = {}
+    for r in readings:
+        by_day[r["reading_date"]] = by_day.get(r["reading_date"], 0.0) + float(r["precip_mm"])
+    n = 0
+    for w in weather:
+        key = w["date"].isoformat()
+        if key in by_day:
+            w["precip_mm"] = by_day[key]
+            w["precip_source"] = "gauge"
+            n += 1
+    return n
+
+
+def weather_context(geom_4326, wx: list, today: date) -> dict:
+    """Kontekst pogodowy do podsumowania bilansu (wszystko NIEBLOKUJĄCE):
+    prognoza 7 dni, bilans P−ET0 30 dni na tle normy 1991–2020 i ostatnia
+    wilgotność gleby z modelu ERA5-Land."""
+    import weather as weather_mod
+    out = {"forecast": weather_mod.forecast_summary(wx, today),
+           "cwb_30d_mm": None, "cwb_30d_pct": None, "cwb_30d_class": None,
+           "soil_moisture": None}
+    past = [r for r in wx if r["date"] < today]
+    if past:
+        end = past[-1]["date"]
+        cwb30 = weather_mod.climatic_water_balance(past, end, 30)
+        out["cwb_30d_mm"] = cwb30
+        try:
+            c = geom_4326.centroid
+            clim = weather_mod.fetch_climatology(c.y, c.x)
+            pct = weather_mod.cwb_percentile(cwb30, end, 30, clim)
+            out["cwb_30d_pct"], out["cwb_30d_class"] = pct, weather_mod.cwb_class(pct)
+        except Exception as e:
+            log.warning("Norma wieloletnia niedostępna: %s", e)
+    try:
+        arch = weather_mod.fetch_weather_series(geom_4326, today - timedelta(days=14), today)
+        last = next((r for r in reversed(arch) if r.get("sm_0_7") is not None), None)
+        if last:
+            out["soil_moisture"] = {"date": last["date"].isoformat(),
+                                    "sm_0_7": last["sm_0_7"], "sm_7_28": last.get("sm_7_28"),
+                                    "sm_28_100": last.get("sm_28_100")}
+    except Exception as e:
+        log.warning("Wilgotność gleby ERA5-Land niedostępna: %s", e)
+    return out
 
 
 def compute_field_balance(field: dict, today: Optional[date] = None) -> dict:
@@ -241,6 +302,7 @@ def compute_field_balance(field: dict, today: Optional[date] = None) -> dict:
     ndvi_points = [(date.fromisoformat(o["obs_date"]), o["ndvi_mean"])
                    for o in obs if o.get("ndvi_mean") is not None]
     events = db.get_irrigation_events(field["id"])
+    gauge_days = apply_rain_gauge(wx, db.get_rain_readings(field["id"]))
 
     kcb_max, p, crop_known = crop_params(field.get("crop_type"))
     taw = field.get("soil_taw_mm")
@@ -264,14 +326,20 @@ def compute_field_balance(field: dict, today: Optional[date] = None) -> dict:
                            "uruchom 'Sprawdź teraz', żeby pobrać dane satelitarne.")
     if any(e.get("amount_mm") is None for e in events):
         assumptions.append("Nawodnienia bez dawki w mm potraktowano jako uzupełnienie do pełnej pojemności.")
+    if gauge_days:
+        assumptions.append(f"Opad z deszczomierza rolnika zastąpił opad z modelu w {gauge_days} "
+                           f"{'dniu' if gauge_days == 1 else 'dniach'}.")
 
     days = run_balance(wx, ndvi_points, events, taw, p, kcb_max, start_date=start)
     summary = summarize_balance(days, taw, p, today)
+    summary.update(weather_context(geom, wx, today))
     summary.update({
         "crop_type": field.get("crop_type"), "kcb_max": kcb_max, "p": p,
         "irrigation_mode": field.get("irrigation_mode"),
         "taw_assumed": taw_assumed, "assumptions": assumptions,
-        "message_pl": describe_balance(summary, field.get("irrigation_mode")),
+        "rain_gauge_days_used": gauge_days,
+        "attribution": weather_mod.OPEN_METEO_ATTRIBUTION,
         "calibration_status": "niekalibrowane / wymaga walidacji terenowej",
     })
+    summary["message_pl"] = describe_balance(summary, field.get("irrigation_mode"))
     return {"summary": summary, "days": [{**r, "date": r["date"].isoformat()} for r in days]}

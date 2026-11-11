@@ -33,11 +33,11 @@ def test_fetch_weather_series_parsuje_odpowiedz_open_meteo():
 
     assert series == [
         {"date": date(2026, 9, 1), "tmin_c": 5.0, "tmax_c": 15.0, "tmean_c": 10.0,
-         "precip_mm": 0.0, "radiation_mj": 12.0, "et0_mm": 2.1},
+         "precip_mm": 0.0, "radiation_mj": 12.0, "et0_mm": 2.1, "vpd_max_kpa": None, "sm_0_7": None, "sm_7_28": None, "sm_28_100": None},
         {"date": date(2026, 9, 2), "tmin_c": -3.0, "tmax_c": 5.0, "tmean_c": 1.0,
-         "precip_mm": 2.5, "radiation_mj": 8.0, "et0_mm": 0.8},
+         "precip_mm": 2.5, "radiation_mj": 8.0, "et0_mm": 0.8, "vpd_max_kpa": None, "sm_0_7": None, "sm_7_28": None, "sm_28_100": None},
         {"date": date(2026, 9, 3), "tmin_c": 1.0, "tmax_c": 10.0, "tmean_c": 5.5,
-         "precip_mm": 0.0, "radiation_mj": 10.0, "et0_mm": 1.5},
+         "precip_mm": 0.0, "radiation_mj": 10.0, "et0_mm": 1.5, "vpd_max_kpa": None, "sm_0_7": None, "sm_7_28": None, "sm_28_100": None},
     ]
     # centroid, nie pełna geometria — sprawdzamy że API dostało lat/lon centroidu
     _, kwargs = mock_get.call_args
@@ -171,3 +171,40 @@ def test_climatic_water_balance_uzupelnia_pojedyncze_braki_srednia():
     series = [{"date": end - timedelta(days=i), "precip_mm": 0.0,
                "et0_mm": None if i == 0 else 2.0} for i in range(14)]
     assert weather.climatic_water_balance(series, end, 14) == -28.0
+
+
+
+# --- Open-Meteo: klucz komercyjny i pamięć podręczna ------------------------
+
+def test_om_url_z_kluczem_przechodzi_na_serwery_customer(monkeypatch):
+    monkeypatch.delenv("OPEN_METEO_API_KEY", raising=False)
+    assert weather.om_url("archive") == "https://archive-api.open-meteo.com/v1/archive"
+    monkeypatch.setenv("OPEN_METEO_API_KEY", "abc")
+    assert weather.om_url("archive") == "https://customer-archive-api.open-meteo.com/v1/archive"
+    assert weather.om_url("forecast") == "https://customer-api.open-meteo.com/v1/forecast"
+
+
+def test_om_get_dokleja_apikey_i_korzysta_z_cache(isolated_db, monkeypatch):
+    isolated_db.init_db()
+    monkeypatch.setattr(weather, "WEATHER_CACHE_ENABLED", True)
+    monkeypatch.setenv("OPEN_METEO_API_KEY", "abc")
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append((url, dict(params)))
+        return MagicMock(status_code=200, json=lambda: {"daily": {"time": ["2026-07-01"]}})
+    monkeypatch.setattr(weather.requests, "get", fake_get)
+    p = {"latitude": 52.2, "longitude": 16.49, "daily": "precipitation_sum"}
+    assert weather.om_get("archive", p, 3600) == {"daily": {"time": ["2026-07-01"]}}
+    assert weather.om_get("archive", p, 3600) == {"daily": {"time": ["2026-07-01"]}}
+    assert len(calls) == 1                         # drugie z pamięci podręcznej
+    assert calls[0][1]["apikey"] == "abc" and calls[0][0].startswith("https://customer-")
+    assert "apikey" not in p                       # parametry wołającego nietknięte
+
+
+def test_om_get_429_to_czytelny_blad(monkeypatch):
+    monkeypatch.setattr(weather.requests, "get", lambda url, params=None, timeout=None:
+                        MagicMock(status_code=429, text='{"reason":"Daily API request limit exceeded"}'))
+    import pytest as _pt
+    with _pt.raises(RuntimeError, match="429"):
+        weather.om_get("forecast", {"latitude": 1, "longitude": 2}, 60)

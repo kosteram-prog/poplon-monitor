@@ -108,6 +108,14 @@ RESIDUAL_MIN_NDVI_RANGE = 0.08        # min. rozpiętość NDVI w historii do do
 # roboczy (niekalibrowany).
 VV_MAX_NDVI = 0.5
 
+# Minimalne NDVI, przy którym NDMI opisuje wilgotność łanu (a nie gleby /
+# resztek pożniwnych). Roboczo; powtórka sezonu 2026 — alarmy na
+# ścierniskach z NDVI ~0.2 były bez sensu agronomicznego.
+MIN_CANOPY_NDVI = 0.35
+# Spadek NDVI względem mediany historii pola, od którego traktujemy zmianę
+# jako zbiór / koszenie / likwidację, a nie stres (roboczo).
+HARVEST_NDVI_DROP = 0.25
+
 # Równomierność wilgotności w obrębie pola (rozkład NDMI z Statistical API,
 # patrz analytics._ndwi_distribution). Średnia z pola może być w normie,
 # gdy część pola jest sucha (koniec bruzdy, niedolany sektor, piaszczysta
@@ -380,9 +388,41 @@ def _cwb_state(obs: dict) -> Optional[str]:
     return "neutral"
 
 
+def _climate_sentence(obs: dict) -> str:
+    """Bilans 30 dni na tle normy 1991–2020 (gdy policzony)."""
+    import weather as weather_mod
+    pct = obs.get("cwb_30d_pct")
+    if pct is None:
+        return ""
+    label = weather_mod.cwb_class(pct)
+    return (f" Na tle lat 1991–2020 ostatnie 30 dni: {label} "
+            f"({pct:.0f}. percentyl bilansu opad−parowanie dla tej pory roku).")
+
+
+def _heat_sentence(obs: dict) -> str:
+    """Wysokie zapotrzebowanie atmosfery — stres możliwy mimo wody w glebie."""
+    import weather as weather_mod
+    vpd, tmax = obs.get("vpd_max_kpa"), obs.get("tmax_c")
+    hot = (vpd is not None and vpd >= weather_mod.VPD_HIGH_KPA) or (
+        tmax is not None and tmax >= weather_mod.HEAT_TMAX_C)
+    if not hot:
+        return ""
+    parts = []
+    if vpd is not None:
+        parts.append(f"VPD do {vpd:.1f} kPa")
+    if tmax is not None:
+        parts.append(f"Tmax {tmax:.0f} °C")
+    return (f" Wysokie zapotrzebowanie atmosfery ({', '.join(parts)}) — przy takim upale "
+            f"rośliny zamykają aparaty szparkowe nawet przy wilgotnej glebie.")
+
+
 def _weather_sentence(obs: dict) -> str:
     """Zdanie kontekstu pogodowego do komunikatu — interpretacja spadku
     sygnału na tle bilansu opad−parowanie (nie zmienia flagi ryzyka)."""
+    return _cwb14_sentence(obs) + _climate_sentence(obs) + _heat_sentence(obs)
+
+
+def _cwb14_sentence(obs: dict) -> str:
     state = _cwb_state(obs)
     cwb = obs.get("cwb_14d_mm")
     if state == "deficit":
@@ -417,20 +457,49 @@ def classify_water_signal(field: dict, observations: list, cohort_ndwi_values: l
     irrigation_ctx = last_irrigation_context(irrigation_events, latest["obs_date"])
 
     raw_drop = bool(own_ndwi and own_ndwi["significant_drop"])
+    # Warunek konieczny alarmu: istotny SPADEK surowego NDMI względem własnej
+    # historii. NDMI rezydualny (względem NDVI) tylko ODSIEWA spadki wyjaśnione
+    # spadkiem zieleni (dojrzewanie, zbiór, likwidacja poplonu) — sam nie
+    # wywołuje alarmu. (Powtórka sezonu 2026: rezyduum jako samodzielny
+    # wyzwalacz flagowało wschody poplonu, gdy NDMI rósł wolniej niż NDVI.)
     if own_resid is not None:
-        # NDMI rezydualny dostępny -> to on decyduje (zmiana NDMI ponad tę
-        # wyjaśnioną zmianą NDVI). Wyjątek: przy deficycie atmosferycznym
-        # (P−ET0) silny spadek surowego NDMI flagujemy także wtedy, gdy NDVI
-        # spada razem z nim — tak wygląda zaawansowany stres (więdnięcie),
-        # nie tylko dojrzewanie.
-        ndmi_decline = own_resid["significant_drop"] or (
-            raw_drop and _cwb_state(latest) == "deficit")
+        # Wyjątek: przy deficycie atmosferycznym (P−ET0) silny spadek NDMI
+        # flagujemy także, gdy NDVI spada razem z nim — tak wygląda
+        # zaawansowany stres (więdnięcie), nie tylko dojrzewanie.
+        ndmi_decline = raw_drop and (own_resid["significant_drop"]
+                                     or _cwb_state(latest) == "deficit")
     else:
         ndmi_decline = raw_drop
     phenology_explained = bool(raw_drop and not ndmi_decline)
-    vv_decline = bool(own_vv and own_vv["used_for_decision"] and own_vv["significant_drop"])
-    own_decline = ndmi_decline or vv_decline
-    uniformity = uniformity_anomaly(observations)
+
+    # Gwałtowny spadek zieleni względem historii pola = zbiór, koszenie albo
+    # likwidacja poplonu. Spadek NDMI jest wtedy skutkiem usunięcia łanu, nie
+    # braku wody (powtórka sezonu 2026: zbiór kukurydzy flagowany jako stres,
+    # bo nachylenie NDMI~NDVI jest przycięte z góry i rezyduum go nie odsiało).
+    harvest_like = bool(raw_drop and own_resid is not None
+                        and own_resid["delta_ndvi"] <= -HARVEST_NDVI_DROP)
+    if harvest_like:
+        ndmi_decline = False
+        phenology_explained = True
+
+    # Ocena wilgotności ŁANU ma sens tylko, gdy łan jest. Przy NDVI poniżej
+    # MIN_CANOPY_NDVI (ściernisko, goła gleba, wschody) NDMI opisuje
+    # wilgotność powierzchni gleby i resztek, nie stres roślin.
+    ndvi_now = latest.get("ndvi_mean")
+    canopy = ndvi_now is None or ndvi_now >= MIN_CANOPY_NDVI
+    if not canopy:
+        ndmi_decline = False
+        phenology_explained = False
+
+    # VV (Sentinel-1) tylko POTWIERDZA spadek optyczny — samodzielnie nie
+    # wywołuje alarmu: na ścierniskach i po uprawkach VV skacze od zmian
+    # szorstkości gleby, nie od wilgotności (powtórka sezonu 2026).
+    vv_confirms = bool(ndmi_decline and own_vv and own_vv["used_for_decision"]
+                       and own_vv["significant_drop"])
+    own_decline = ndmi_decline
+    # Równomierność: tylko przy łanie i nie w trakcie zbioru/likwidacji
+    # (pole częściowo zebrane ma z natury duży rozrzut NDMI).
+    uniformity = uniformity_anomaly(observations) if (canopy and not harvest_like) else None
     uneven = bool(uniformity and uniformity["flagged"])
 
     risk_type = None
@@ -456,6 +525,13 @@ def classify_water_signal(field: dict, observations: list, cohort_ndwi_values: l
         else:
             message += " Sprawdź, czy to stała cecha gleby (piaszczyste płaty) czy nowe zjawisko."
         message += " (sygnał niekalibrowany — wymaga potwierdzenia w terenie)"
+    elif not canopy:
+        message = (f"Brak zwartej okrywy roślinnej (NDVI {ndvi_now:.2f}) — wilgotności łanu "
+                   f"nie da się ocenić z satelity; o zapasie wody w glebie mówi bilans wodny.")
+    elif not own_decline and harvest_like:
+        message = (f"Brak sygnału stresu wodnego — gwałtowny spadek zieleni (NDVI "
+                   f"{own_resid['delta_ndvi']:+.2f} względem historii pola) wygląda na zbiór, "
+                   f"koszenie albo likwidację poplonu.")
     elif not own_decline and phenology_explained:
         message = ("Brak sygnału stresu wodnego — spadek NDMI jest proporcjonalny "
                    "do spadku zieleni (NDVI), co wskazuje raczej na dojrzewanie, "
@@ -471,6 +547,8 @@ def classify_water_signal(field: dict, observations: list, cohort_ndwi_values: l
             message = (f"Pole {field.get('parcel_id')} wykazuje deficyt wilgoci — "
                        f"rozważ mulczowanie / poplon.")
         message += _weather_sentence(latest)
+        if vv_confirms:
+            message += " Spadek potwierdza też radar (Sentinel-1 VV)."
         if cohort_ndwi is None:
             message += " Brak wystarczającej liczby podobnych pól w regionie do porównania."
         elif cohort_ndwi["z_score"] <= COHORT_FIELD_SPECIFIC_Z:
@@ -494,11 +572,18 @@ def classify_water_signal(field: dict, observations: list, cohort_ndwi_values: l
             "uniformity": uniformity,
         },
         "phenology_explained": phenology_explained,
+        "harvest_like": harvest_like,
+        "canopy_present": canopy,
+        "vv_confirms": vv_confirms,
         "weather_context": {
             "dry_spell_at_obs": bool(latest.get("dry_spell")),
             "cwb_14d_mm": latest.get("cwb_14d_mm"),
             "cwb_30d_mm": latest.get("cwb_30d_mm"),
             "atmospheric_deficit": _cwb_state(latest) == "deficit",
+            "cwb_30d_pct": latest.get("cwb_30d_pct"),
+            "vpd_max_kpa": latest.get("vpd_max_kpa"),
+            "tmax_c": latest.get("tmax_c"),
+            "soil_moisture_era5land": {k: latest.get(k) for k in ("sm_0_7", "sm_7_28", "sm_28_100")},
         },
         "irrigation_context": irrigation_ctx,
         "obs_date": latest["obs_date"],
@@ -538,6 +623,25 @@ def inner_buffer_utm(geom_4326, meters: float = 10.0):
     return shp_transform(inv, g_buf)
 
 
+S1_TRACK_REPEAT_DAYS = 6   # konstelacja S1 (dwa satelity w fazie 180°): ta sama ścieżka co 6 dni
+
+
+def infer_missing_orbits(radar_dates: list, orbits: dict) -> dict:
+    """Uzupełnia orbity względne dla scen S1, których brakuje w katalogu STAC
+    (zdarza się: Sentinel Hub ma scenę, STAC nie). Ta sama ścieżka nad
+    punktem wraca co S1_TRACK_REPEAT_DAYS dni, więc scena oddalona o
+    wielokrotność 6 dni od sceny o znanej orbicie ma tę samą orbitę —
+    o ile wskazanie jest jednoznaczne."""
+    out = dict(orbits)
+    for d in radar_dates:
+        if d in out:
+            continue
+        cands = {o for d0, o in orbits.items() if (d - d0).days % S1_TRACK_REPEAT_DAYS == 0}
+        if len(cands) == 1:
+            out[d] = cands.pop()
+    return out
+
+
 def fetch_sources(field: dict, t_start: date, t_end: date) -> dict:
     """Pobiera wszystkie źródła dla pola w oknie [t_start, t_end]: S2 (tylko
     z maską chmur), S1, orbity względne S1, pogodę (z zapasem na bilans
@@ -549,6 +653,12 @@ def fetch_sources(field: dict, t_start: date, t_end: date) -> dict:
     import weather as weather_mod
 
     geom = shapely_wkt.loads(field["geometry_wkt"])
+    import water_geometry as wg
+    try:
+        wg.check_field_extent(geom, label=f"Pole {field.get('parcel_id')}")
+    except ValueError as e:
+        # Czytelny komunikat zamiast błędu 400 Sentinel Hub (obszar > 2500 px).
+        raise RuntimeError(str(e) + " Usuń to pole z modułu i dodaj działki osobno.")
     geom_buf = inner_buffer_utm(geom, 10.0)
 
     # TYLKO zapytanie z maską chmur SCL (bez łagodniejszego fallbacku
@@ -569,6 +679,7 @@ def fetch_sources(field: dict, t_start: date, t_end: date) -> dict:
             orbits = fetch_s1_relative_orbits(geom_buf, radar[0]["date"], radar[-1]["date"]) or {}
         except Exception as e:
             log.warning("Orbity S1 nieznane dla pola wodnego id=%s: %s", field.get("id"), e)
+        orbits = infer_missing_orbits([r["date"] for r in radar], orbits)
 
     weather_series, dry_dates = [], set()
     try:
@@ -579,8 +690,15 @@ def fetch_sources(field: dict, t_start: date, t_end: date) -> dict:
     except Exception as e:
         log.warning("Pogoda niedostepna dla pola wodnego id=%s: %s", field.get("id"), e)
 
+    climate = {}
+    try:
+        c = geom_buf.centroid
+        climate = weather_mod.fetch_climatology(c.y, c.x)
+    except Exception as e:
+        log.warning("Norma wieloletnia niedostepna dla pola wodnego id=%s: %s", field.get("id"), e)
+
     return {"optical": optical, "radar": radar, "orbits": orbits,
-            "weather": weather_series, "dry_dates": dry_dates}
+            "weather": weather_series, "dry_dates": dry_dates, "climate": climate}
 
 
 def build_observation(field: dict, opt: dict, sources: dict) -> dict:
@@ -608,7 +726,13 @@ def build_observation(field: dict, opt: dict, sources: dict) -> dict:
         "dry_spell": d in (sources.get("dry_dates") or set()),
         "et0_mm": day_rec.get("et0_mm"),
         "cwb_14d_mm": weather_mod.climatic_water_balance(weather_series, d, 14),
-        "cwb_30d_mm": weather_mod.climatic_water_balance(weather_series, d, 30),
+        "cwb_30d_mm": (cwb30 := weather_mod.climatic_water_balance(weather_series, d, 30)),
+        "cwb_30d_pct": weather_mod.cwb_percentile(cwb30, d, 30, sources.get("climate") or {}),
+        "vpd_max_kpa": day_rec.get("vpd_max_kpa"),
+        "tmax_c": day_rec.get("tmax_c"),
+        "sm_0_7": day_rec.get("sm_0_7"),
+        "sm_7_28": day_rec.get("sm_7_28"),
+        "sm_28_100": day_rec.get("sm_28_100"),
         "ndwi_p10": opt.get("ndwi_p10"),
         "ndwi_p50": opt.get("ndwi_p50"),
         "ndwi_low_frac": opt.get("ndwi_low_frac"),
@@ -706,12 +830,23 @@ def balance_alarm_decision(field: dict, verdict: dict) -> Optional[dict]:
     bal = verdict.get("water_balance") or {}
     if verdict.get("risk_flag") or not bal:
         return None
+    if field.get("irrigation_mode") != "irrigation":
+        # Na polu deszczowym nie ma działania do podjęcia (nie da się
+        # podlać) — bilans zostaje kontekstem werdyktu, bez alarmu w kolejce.
+        return None
     dts = bal.get("days_to_stress")
-    if bal.get("status") != "stress" and (dts is None or dts > BALANCE_ALERT_DAYS):
+    fc = bal.get("forecast") or {}
+    hot_soon = bool(fc.get("dry_hot")) and bal.get("status") == "approaching"
+    if bal.get("status") != "stress" and (dts is None or dts > BALANCE_ALERT_DAYS) and not hot_soon:
         return None
     pid = field.get("parcel_id")
     if bal.get("status") == "stress":
         head = f"Pole {pid}: model bilansu wodnego wskazuje stres wodny (zużyto {bal.get('depletion_mm', 0):.0f} mm, próg {bal.get('raw_mm', 0):.0f} mm)."
+    elif hot_soon and (dts is None or dts > BALANCE_ALERT_DAYS):
+        head = (f"Pole {pid}: zapas łatwo dostępnej wody prawie wyczerpany "
+                f"(zużyto {bal.get('depletion_mm', 0):.0f} z {bal.get('raw_mm', 0):.0f} mm), "
+                f"a prognoza zapowiada suchy i gorący tydzień"
+                + (f" (Tmax do {fc['tmax_c']:.0f} °C)" if fc.get("tmax_c") is not None else "") + ".")
     else:
         when = "jutro" if dts == 1 else f"za {dts} dni"
         if dts == 0:

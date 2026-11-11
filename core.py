@@ -359,6 +359,34 @@ def _fetch_parcel_geometry_uldk(parcel_id: str, key: str):
     return geom, meta
 
 
+def fetch_parcel_at_point(lon: float, lat: float):
+    """Działka ewidencyjna zawierająca punkt (ULDK GetParcelByXY, tylko Polska).
+    Zwraca (geom_4326, meta) z meta["parcel_id"] = identyfikator TERYT działki."""
+    params = {"request": "GetParcelByXY", "xy": f"{lon},{lat},4326",
+              "result": "geom_wkt,teryt,voivodeship,county,commune", "srid": "4326"}
+    try:
+        r = requests.get(ULDK_URL, params=params, timeout=30)
+        r.raise_for_status()
+    except requests.RequestException as e:
+        raise AppError(f"Brak połączenia z ULDK (GUGiK): {e}")
+    lines = r.text.strip().split("\n")
+    if lines[0].strip() != "0" or len(lines) < 2:
+        raise AppError("W tym miejscu ULDK nie zwrócił działki ewidencyjnej "
+                       "(punkt poza Polską albo poza działką).")
+    fields = lines[1].split("|")
+    wkt_str = fields[0]
+    if wkt_str.upper().startswith("SRID="):
+        wkt_str = wkt_str.split(";", 1)[1]
+    geom = shapely_wkt.loads(wkt_str)
+    if geom.is_empty:
+        raise AppError("ULDK zwrócił pustą geometrię działki.")
+    meta = {}
+    if len(fields) >= 5:
+        meta = {"parcel_id": fields[1], "teryt": fields[1], "wojewodztwo": fields[2],
+                "powiat": fields[3], "gmina": fields[4]}
+    return geom, meta
+
+
 def inner_buffer(geom_4326, meters: float = 10.0):
     to_2180 = Transformer.from_crs(4326, 2180, always_xy=True).transform
     to_4326 = Transformer.from_crs(2180, 4326, always_xy=True).transform

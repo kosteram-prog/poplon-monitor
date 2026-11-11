@@ -106,19 +106,14 @@ def fetch_terrain_context(geom_4326, offset_m: float = SAMPLE_OFFSET_M) -> Optio
     lats = ",".join(str(p[0]) for p in points)
     lons = ",".join(str(p[1]) for p in points)
 
+    import weather
     try:
-        r = requests.get(
-            OPEN_METEO_ELEVATION_URL,
-            params={"latitude": lats, "longitude": lons},
-            timeout=20,
-        )
-    except requests.RequestException:
+        data = weather.om_get("elevation", {"latitude": lats, "longitude": lons},
+                              weather.CACHE_TTL_ELEVATION_S, timeout=20)
+    except RuntimeError:
         return None
 
-    if r.status_code != 200:
-        return None
-
-    elevations = r.json().get("elevation")
+    elevations = data.get("elevation")
     if not elevations or len(elevations) != 5 or any(e is None for e in elevations):
         return None
 

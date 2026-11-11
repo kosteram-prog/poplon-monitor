@@ -130,3 +130,12 @@ def no_real_network(monkeypatch):
     def _blocked(self, method, url, *a, **k):
         raise requests.ConnectionError(f"sieć wyłączona w testach: {method} {url}")
     monkeypatch.setattr(requests.sessions.Session, "request", _blocked)
+
+
+@pytest.fixture(autouse=True)
+def no_weather_cache(monkeypatch):
+    """Pamięć podręczna Open-Meteo wyłączona w testach (testy podmieniają
+    odpowiedzi API i nie mogą dostawać wyników z poprzedniego testu).
+    Testy samej pamięci podręcznej włączają ją jawnie."""
+    import weather
+    monkeypatch.setattr(weather, "WEATHER_CACHE_ENABLED", False)

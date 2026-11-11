@@ -30,6 +30,7 @@ from auth import require_operator_key
 from photo_handler import router as photo_router
 from calibration import router as calibration_router
 from irrigation_log import router as irrigation_router
+from yield_api import router as yield_router
 
 Path("uploads/photos").mkdir(parents=True, exist_ok=True)
 
@@ -96,6 +97,7 @@ app = FastAPI(title="Weryfikacja poplonów NDVI", lifespan=lifespan)
 app.include_router(photo_router)
 app.include_router(calibration_router)
 app.include_router(irrigation_router)
+app.include_router(yield_router)
 
 log = logging.getLogger("app")
 

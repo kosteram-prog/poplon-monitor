@@ -445,3 +445,73 @@ def test_inner_buffer_utm_mala_dzialka_bez_bufora():
     from shapely.geometry import box
     g = box(17.0, 51.1, 17.0002, 51.1002)   # ~14 x 22 m
     assert ws.inner_buffer_utm(g, 10.0).equals(g)
+
+
+# --- regresje z powtórki sezonu 2026 (pola LENs, sierpień–listopad) ---------
+
+def test_wschody_poplonu_ndmi_rosnie_wolniej_niz_ndvi_bez_alarmu():
+    """220702_2.0012.153, 6.09: NDMI +0.15, NDVI +0.25 — rezyduum ujemne,
+    ale to wzrost, nie spadek. Dawniej: alarm 'stres wodny'."""
+    field = {"parcel_id": "A", "irrigation_mode": "rainfed"}
+    hist = [_obs_pair(d, m, v) for d, m, v in zip(
+        range(6, 0, -1), [-0.14, -0.08, -0.08, -0.10, -0.12, -0.09], [0.15, 0.23, 0.26, 0.20, 0.18, 0.22])]
+    obs = hist + [_obs_pair(0, 0.17, 0.52)]
+    r = ws.classify_water_signal(field, obs, [], [])
+    assert r["risk_flag"] is False
+
+
+def test_sam_spadek_vv_nie_wywoluje_alarmu():
+    """Ściernisko/uprawki: VV spada o kilka dB, NDMI stabilne. Dawniej: alarm."""
+    field = {"parcel_id": "A", "irrigation_mode": "rainfed"}
+    obs = []
+    for d, vv in zip(range(6, 0, -1), [-9.4, -9.5, -9.3, -9.6, -9.4, -9.5]):
+        o = _vv_obs(d, vv, 51, ndvi=0.40); o["ndwi_mean"] = 0.10; obs.append(o)
+    last = _vv_obs(0, -13.8, 51, ndvi=0.40); last["ndwi_mean"] = 0.10
+    r = ws.classify_water_signal(field, obs + [last], [], [])
+    assert r["components"]["own_vv"]["significant_drop"] is True
+    assert r["risk_flag"] is False and r["vv_confirms"] is False
+
+
+def test_gola_gleba_bez_alarmu_i_z_wyjasnieniem():
+    """101807_5.0013.47, 21.10: NDVI 0.22 po likwidacji — NDMI gleby spada,
+    ale to nie jest stres łanu. Dawniej: alarm."""
+    field = {"parcel_id": "A", "irrigation_mode": "rainfed"}
+    hist = [_obs_pair(d, m, 0.24) for d, m in zip(range(6, 0, -1), [0.01, 0.02, 0.0, 0.01, 0.02, 0.01])]
+    obs = hist + [_obs_pair(0, -0.11, 0.22, cwb=-40.0)]
+    r = ws.classify_water_signal(field, obs, [], [])
+    assert r["risk_flag"] is False and r["canopy_present"] is False
+    assert "Brak zwartej okrywy" in r["message_pl"]
+
+
+def test_vv_potwierdza_spadek_optyczny_w_komunikacie():
+    field = {"parcel_id": "A", "irrigation_mode": "rainfed"}
+    obs = []
+    for d, (m, vv) in zip(range(6, 0, -1), [(0.30, -11.0), (0.31, -11.2), (0.29, -10.9),
+                                           (0.30, -11.1), (0.31, -11.0), (0.30, -11.1)]):
+        o = _vv_obs(d, vv, 22, ndvi=0.45); o["ndwi_mean"] = m; obs.append(o)
+    last = _vv_obs(0, -14.0, 22, ndvi=0.45); last["ndwi_mean"] = 0.18
+    r = ws.classify_water_signal(field, obs + [last], [], [])
+    assert r["risk_flag"] is True and r["vv_confirms"] is True
+    assert "radar" in r["message_pl"]
+
+
+def test_uzupelnianie_brakujacych_orbit_z_cyklu_6_dni():
+    from datetime import date
+    # 1.10 i 13.10 dzieli 12 dni, 1.10 i 7.10 — 6 dni: obie orbity pasują -> nie zgadujemy
+    orbits = {date(2026, 10, 13): 49, date(2026, 10, 7): 144}
+    assert date(2026, 10, 1) not in ws.infer_missing_orbits([date(2026, 10, 1)], orbits)
+    orbits2 = {date(2026, 10, 13): 49, date(2026, 10, 8): 144}
+    out2 = ws.infer_missing_orbits([date(2026, 10, 1)], orbits2)
+    assert out2[date(2026, 10, 1)] == 49
+    assert date(2026, 10, 3) not in ws.infer_missing_orbits([date(2026, 10, 3)], orbits2)
+
+
+def test_zbior_gwaltowny_spadek_ndvi_bez_alarmu():
+    """test 2 (16.48E 52.20N), 21.09: NDVI 0.80 -> 0.36, NDMI 0.39 -> 0.07 — zbiór."""
+    field = {"parcel_id": "A", "irrigation_mode": "rainfed"}
+    hist = [_obs_pair(d, m, v) for d, m, v in zip(
+        range(6, 0, -1), [0.395, 0.382, 0.404, 0.39, 0.40, 0.385], [0.80, 0.79, 0.81, 0.80, 0.80, 0.79])]
+    obs = hist + [_obs_pair(0, 0.066, 0.36, cwb=-10.0)]
+    r = ws.classify_water_signal(field, obs, [], [])
+    assert r["risk_flag"] is False and r["harvest_like"] is True
+    assert "zbiór" in r["message_pl"]

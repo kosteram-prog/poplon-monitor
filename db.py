@@ -157,6 +157,47 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY(water_field_id) REFERENCES water_monitored_fields(id)
         );
+        CREATE TABLE IF NOT EXISTS weather_cache (
+            key TEXT PRIMARY KEY,
+            payload TEXT NOT NULL,
+            fetched_at REAL NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS yield_maps (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT,
+            parcel_id TEXT,
+            crop_type TEXT,
+            season_year INTEGER,
+            date_from TEXT,
+            date_to TEXT,
+            reported_yield_t_ha REAL,
+            geometry_wkt TEXT,
+            status TEXT DEFAULT 'pending',
+            error TEXT,
+            stats_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+        CREATE TABLE IF NOT EXISTS replay_ratings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            water_field_id INTEGER NOT NULL,
+            obs_date TEXT NOT NULL,
+            risk_type TEXT NOT NULL DEFAULT '',
+            rating TEXT NOT NULL,
+            metrics_json TEXT,
+            note TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            UNIQUE(water_field_id, obs_date, risk_type),
+            FOREIGN KEY(water_field_id) REFERENCES water_monitored_fields(id)
+        );
+        CREATE TABLE IF NOT EXISTS rain_gauge_readings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            water_field_id INTEGER NOT NULL,
+            reading_date TEXT NOT NULL,
+            precip_mm REAL NOT NULL,
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY(water_field_id) REFERENCES water_monitored_fields(id)
+        );
         CREATE TABLE IF NOT EXISTS irrigation_plans (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             water_field_id INTEGER NOT NULL,
@@ -202,6 +243,12 @@ def init_db():
             ("water_observations", "ndwi_low_frac", "REAL"),
             ("water_observations", "s1_rel_orbit", "INTEGER"),
             ("water_observations", "s1_date", "TEXT"),
+            ("water_observations", "cwb_30d_pct", "REAL"),
+            ("water_observations", "vpd_max_kpa", "REAL"),
+            ("water_observations", "tmax_c", "REAL"),
+            ("water_observations", "sm_0_7", "REAL"),
+            ("water_observations", "sm_7_28", "REAL"),
+            ("water_observations", "sm_28_100", "REAL"),
             ("irrigation_events", "amount_mm", "REAL"),
         ):
             try:
@@ -622,7 +669,8 @@ def get_irrigation_events_for_calibration(min_samples=5):
 # ---------------------------------------------------------------------------
 
 _WATER_OBS_EXTRA_COLUMNS = {
-    "et0_mm", "cwb_14d_mm", "cwb_30d_mm",
+    "et0_mm", "cwb_14d_mm", "cwb_30d_mm", "cwb_30d_pct",
+    "vpd_max_kpa", "tmax_c", "sm_0_7", "sm_7_28", "sm_28_100",
     "ndwi_p10", "ndwi_p50", "ndwi_low_frac",
     "s1_rel_orbit", "s1_date",
 }
@@ -801,3 +849,122 @@ def set_irrigation_plan_status(plan_id, status, irrigation_event_id=None, notes=
 def delete_irrigation_plan(plan_id):
     with _lock, _conn() as c:
         c.execute("DELETE FROM irrigation_plans WHERE id=?", (plan_id,))
+
+
+# ---------------------------------------------------------------------------
+# weather_cache — pamięć podręczna odpowiedzi Open-Meteo (weather.om_get)
+# ---------------------------------------------------------------------------
+
+def get_weather_cache(key):
+    """(payload, fetched_at_epoch) albo None."""
+    with _lock, _conn() as c:
+        row = c.execute("SELECT payload, fetched_at FROM weather_cache WHERE key=?", (key,)).fetchone()
+        return (row[0], row[1]) if row else None
+
+
+def set_weather_cache(key, payload):
+    import time as _time
+    with _lock, _conn() as c:
+        c.execute("INSERT INTO weather_cache (key,payload,fetched_at) VALUES (?,?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET payload=excluded.payload, fetched_at=excluded.fetched_at",
+                  (key, payload, _time.time()))
+
+
+# ---------------------------------------------------------------------------
+# rain_gauge_readings — odczyty deszczomierza rolnika. W bilansie wodnym
+# zastępują opad z modelu (siatka 9-25 km nie widzi lokalnych burz).
+# ---------------------------------------------------------------------------
+
+def add_rain_reading(water_field_id, reading_date, precip_mm, notes=None):
+    with _lock, _conn() as c:
+        cur = c.execute("INSERT INTO rain_gauge_readings (water_field_id,reading_date,precip_mm,notes) "
+                        "VALUES (?,?,?,?)", (water_field_id, reading_date, float(precip_mm), notes))
+        return cur.lastrowid
+
+
+def get_rain_readings(water_field_id):
+    with _lock, _conn() as c:
+        rows = c.execute("SELECT * FROM rain_gauge_readings WHERE water_field_id=? "
+                         "ORDER BY reading_date ASC, id ASC", (water_field_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_rain_reading(reading_id):
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM rain_gauge_readings WHERE id=?", (reading_id,)).rowcount
+
+
+# ---------------------------------------------------------------------------
+# replay_ratings — oceny doradcy dla wyników powtórki sezonu (water_replay):
+# 'confirmed' (alarm trafny), 'rejected' (fałszywy), 'missed' (problem był,
+# alarmu nie było), 'unsure'. W odróżnieniu od kolejki triage obejmują OBA
+# rodzaje błędów, więc kalibracja może próg zarówno zaostrzyć, jak i
+# poluzować (water_replay.suggest_threshold_from_ratings).
+# ---------------------------------------------------------------------------
+
+_REPLAY_RATINGS = {"confirmed", "rejected", "missed", "unsure"}
+
+
+def upsert_replay_rating(water_field_id, obs_date, rating, risk_type="", metrics_json=None, note=None):
+    if rating not in _REPLAY_RATINGS:
+        raise ValueError(f"Nieznana ocena: {rating!r}")
+    with _lock, _conn() as c:
+        c.execute(
+            "INSERT INTO replay_ratings (water_field_id,obs_date,risk_type,rating,metrics_json,note) "
+            "VALUES (?,?,?,?,?,?) ON CONFLICT(water_field_id,obs_date,risk_type) DO UPDATE SET "
+            "rating=excluded.rating, metrics_json=excluded.metrics_json, note=excluded.note, "
+            "created_at=datetime('now')",
+            (water_field_id, obs_date, risk_type or "", rating, metrics_json, note))
+        row = c.execute("SELECT * FROM replay_ratings WHERE water_field_id=? AND obs_date=? AND risk_type=?",
+                        (water_field_id, obs_date, risk_type or "")).fetchone()
+        return dict(row)
+
+
+def get_replay_ratings(water_field_id=None):
+    with _lock, _conn() as c:
+        if water_field_id is None:
+            rows = c.execute("SELECT * FROM replay_ratings ORDER BY obs_date").fetchall()
+        else:
+            rows = c.execute("SELECT * FROM replay_ratings WHERE water_field_id=? ORDER BY obs_date",
+                             (water_field_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_replay_rating(rating_id):
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM replay_ratings WHERE id=?", (rating_id,)).rowcount
+
+
+# ---------------------------------------------------------------------------
+# yield_maps — mapy stref plonu MVI (yield_mvi.py); pliki w uploads/yield_maps/<id>/
+# ---------------------------------------------------------------------------
+
+def add_yield_map(**kw):
+    cols = ["label", "parcel_id", "crop_type", "season_year", "date_from", "date_to",
+            "reported_yield_t_ha", "geometry_wkt"]
+    vals = [kw.get(c) for c in cols]
+    with _lock, _conn() as c:
+        cur = c.execute(f"INSERT INTO yield_maps ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals)
+        return cur.lastrowid
+
+
+def update_yield_map(map_id, status, stats_json=None, error=None):
+    with _lock, _conn() as c:
+        c.execute("UPDATE yield_maps SET status=?, stats_json=?, error=? WHERE id=?",
+                  (status, stats_json, error, map_id))
+
+
+def get_yield_maps():
+    with _lock, _conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM yield_maps ORDER BY id DESC").fetchall()]
+
+
+def get_yield_map(map_id):
+    with _lock, _conn() as c:
+        r = c.execute("SELECT * FROM yield_maps WHERE id=?", (map_id,)).fetchone()
+        return dict(r) if r else None
+
+
+def delete_yield_map(map_id):
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM yield_maps WHERE id=?", (map_id,)).rowcount

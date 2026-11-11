@@ -28,6 +28,7 @@ rozdzielczość ~9-25km), więc dokładna geometria działki nie ma znaczenia.
 Integruje się z core.py/analytics.py bez ich modyfikacji.
 """
 
+import os
 from datetime import date, timedelta
 from typing import Optional
 
@@ -35,6 +36,94 @@ import requests
 
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+OPEN_METEO_ELEVATION_URL = "https://api.open-meteo.com/v1/elevation"
+OPEN_METEO_ATTRIBUTION = "Dane pogodowe: Open-Meteo.com (CC-BY 4.0), reanaliza ERA5 / ERA5-Land (Copernicus)"
+
+# ---------------------------------------------------------------------------
+# Open-Meteo: licencja, klucz, pamięć podręczna
+# ---------------------------------------------------------------------------
+#
+# Darmowe API Open-Meteo jest WYŁĄCZNIE do użytku niekomercyjnego, z limitem
+# < 10 000 zapytań/dzień, 5 000/h, 600/min na adres IP
+# (https://open-meteo.com/en/terms). Do użytku komercyjnego potrzebny jest
+# plan płatny: zapytania idą wtedy na serwery z przedrostkiem "customer-"
+# z parametrem apikey. Ustaw OPEN_METEO_API_KEY w .env, a aplikacja sama
+# przełączy się na te serwery. Dane w obu przypadkach: CC-BY 4.0 (wymagany
+# podpis źródła — OPEN_METEO_ATTRIBUTION).
+#
+# Pamięć podręczna w SQLite (tabela weather_cache) oszczędza limit: ten sam
+# okres archiwalny nie jest pobierany drugi raz, klimatologia 1991–2020
+# pobierana jest raz na punkt na rok, prognoza — co najwyżej co 3 h.
+WEATHER_CACHE_ENABLED = os.environ.get("WEATHER_CACHE", "1") != "0"
+CACHE_TTL_FORECAST_S = 3 * 3600
+CACHE_TTL_RECENT_S = 6 * 3600          # archiwum obejmujące ostatnie dni (ERA5 jeszcze się uzupełnia)
+CACHE_TTL_ARCHIVE_S = 30 * 24 * 3600   # archiwum starsze niż ~10 dni
+CACHE_TTL_CLIMATE_S = 365 * 24 * 3600
+CACHE_TTL_ELEVATION_S = 365 * 24 * 3600
+
+
+def om_url(kind: str) -> str:
+    """Adres usługi Open-Meteo; z kluczem komercyjnym — serwery customer-."""
+    base = {"archive": OPEN_METEO_ARCHIVE_URL, "forecast": OPEN_METEO_FORECAST_URL,
+            "elevation": OPEN_METEO_ELEVATION_URL}[kind]
+    if os.environ.get("OPEN_METEO_API_KEY"):
+        base = base.replace("https://", "https://customer-", 1)
+    return base
+
+
+def om_get(kind: str, params: dict, ttl_s: float, timeout: int = 30) -> dict:
+    """Zapytanie do Open-Meteo z pamięcią podręczną. Rzuca RuntimeError przy
+    błędzie (w tym 429 — przekroczony limit darmowego API)."""
+    import json as _json
+    params = dict(params)
+    key = kind + "?" + "&".join(f"{k}={params[k]}" for k in sorted(params))
+    if WEATHER_CACHE_ENABLED:
+        cached = _cache_get(key, ttl_s)
+        if cached is not None:
+            return cached
+    api_key = os.environ.get("OPEN_METEO_API_KEY")
+    if api_key:
+        params["apikey"] = api_key
+    try:
+        r = requests.get(om_url(kind), params=params, timeout=timeout)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Brak połączenia z Open-Meteo: {e}")
+    if r.status_code != 200:
+        raise RuntimeError(f"Open-Meteo błąd {r.status_code}: {r.text[:300]}")
+    data = r.json()
+    if WEATHER_CACHE_ENABLED:
+        _cache_set(key, _json.dumps(data))
+    return data
+
+
+def _cache_get(key: str, ttl_s: float):
+    import json as _json
+    import time as _time
+    try:
+        import db
+        row = db.get_weather_cache(key)
+    except Exception:
+        return None
+    if not row or _time.time() - row[1] > ttl_s:
+        return None
+    try:
+        return _json.loads(row[0])
+    except ValueError:
+        return None
+
+
+def _cache_set(key: str, payload: str):
+    try:
+        import db
+        db.set_weather_cache(key, payload)
+    except Exception:
+        pass   # brak tabeli (np. przed init_db) — po prostu bez pamięci podręcznej
+
+
+def _round_coord(v: float) -> float:
+    # ~1 km — siatka ERA5/ERA5-Land ma 9-25 km, więc sąsiednie pola mogą
+    # dzielić jedno zapytanie (i jedną pozycję w pamięci podręcznej).
+    return round(float(v), 2)
 
 # Próg przymrozka istotnego agronomicznie (nie zwykłe nocne ochłodzenie) —
 # poniżej tej temperatury minimalnej dobowej tkanka roślinna typowych
@@ -80,6 +169,17 @@ GDD_EARLY_TO_PEAK = 420.0    # ~6 tyg. * 7 dni * 10 GDD/dzień
 GDD_PEAK_TO_LATE  = 1120.0   # ~16 tyg. * 7 dni * 10 GDD/dzień
 
 
+ARCHIVE_DAILY_VARS = [
+    "temperature_2m_min", "temperature_2m_max", "temperature_2m_mean",
+    "precipitation_sum", "shortwave_radiation_sum",
+    "et0_fao_evapotranspiration",
+    # zapotrzebowanie atmosfery i wilgotność gleby z modelu (ERA5-Land, m³/m³)
+    "vapour_pressure_deficit_max",
+    "soil_moisture_0_to_7cm_mean", "soil_moisture_7_to_28cm_mean",
+    "soil_moisture_28_to_100cm_mean",
+]
+
+
 def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
     """
     Pobiera dzienny szereg (temperatury min/średnia/max, suma opadów,
@@ -98,6 +198,9 @@ def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
         "radiation_mj": float | None,   # suma promieniowania krótkofalowego [MJ/m²]
         "et0_mm":       float | None,   # ewapotranspiracja wskaźnikowa FAO-56
                                         #   Penman-Monteith (Open-Meteo, ERA5) [mm]
+        "vpd_max_kpa":  float | None,   # maks. dobowy deficyt pary wodnej [kPa]
+        "sm_0_7", "sm_7_28", "sm_28_100": float | None,  # wilgotność gleby
+                                        #   ERA5-Land, średnia dobowa [m³/m³]
     }
 
     Rzuca RuntimeError przy błędzie API — wywołujący (app.py check_multi)
@@ -106,32 +209,21 @@ def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
     zubażać o jeden, pomocniczy sygnał).
     """
     centroid = geom_4326.centroid
-    lat, lon = centroid.y, centroid.x
+    lat, lon = _round_coord(centroid.y), _round_coord(centroid.x)
 
     params = {
         "latitude": lat,
         "longitude": lon,
         "start_date": t_start.isoformat(),
         "end_date": t_end.isoformat(),
-        "daily": ",".join([
-            "temperature_2m_min", "temperature_2m_max", "temperature_2m_mean",
-            "precipitation_sum", "shortwave_radiation_sum",
-            "et0_fao_evapotranspiration",
-        ]),
+        "daily": ",".join(ARCHIVE_DAILY_VARS),
         # Doby liczone w lokalnej strefie czasowej PUNKTU (dla Polski to
         # i tak Europe/Warsaw) — dawniej na sztywno Europe/Warsaw, co dla
         # pól w Uzbekistanie przesuwało granicę doby o 4 godziny.
         "timezone": "auto",
     }
-    try:
-        r = requests.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=30)
-    except requests.RequestException as e:
-        raise RuntimeError(f"Brak połączenia z Open-Meteo: {e}")
-
-    if r.status_code != 200:
-        raise RuntimeError(f"Open-Meteo błąd {r.status_code}: {r.text[:300]}")
-
-    daily = r.json().get("daily", {})
+    ttl = CACHE_TTL_ARCHIVE_S if t_end < date.today() - timedelta(days=10) else CACHE_TTL_RECENT_S
+    daily = om_get("archive", params, ttl).get("daily", {})
     dates  = daily.get("time") or []
     tmins  = daily.get("temperature_2m_min") or []
     tmaxs  = daily.get("temperature_2m_max") or []
@@ -157,6 +249,10 @@ def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
             "precip_mm": _at(precs, i),
             "radiation_mj": _at(rads, i),
             "et0_mm": _at(et0s, i),
+            "vpd_max_kpa": _at(daily.get("vapour_pressure_deficit_max") or [], i),
+            "sm_0_7": _at(daily.get("soil_moisture_0_to_7cm_mean") or [], i),
+            "sm_7_28": _at(daily.get("soil_moisture_7_to_28cm_mean") or [], i),
+            "sm_28_100": _at(daily.get("soil_moisture_28_to_100cm_mean") or [], i),
         })
     return out
 
@@ -203,21 +299,17 @@ def fetch_recent_and_forecast(geom_4326, past_days: int = 92,
     (water_balance.py). Zwraca [{"date", "precip_mm", "et0_mm", "is_forecast"}]."""
     c = geom_4326.centroid
     params = {
-        "latitude": c.y, "longitude": c.x,
-        "daily": "precipitation_sum,et0_fao_evapotranspiration",
+        "latitude": _round_coord(c.y), "longitude": _round_coord(c.x),
+        "daily": "precipitation_sum,et0_fao_evapotranspiration,temperature_2m_max,vapour_pressure_deficit_max",
         "past_days": int(past_days), "forecast_days": int(forecast_days),
         "timezone": "auto",
     }
-    try:
-        r = requests.get(OPEN_METEO_FORECAST_URL, params=params, timeout=30)
-    except requests.RequestException as e:
-        raise RuntimeError(f"Brak połączenia z Open-Meteo: {e}")
-    if r.status_code != 200:
-        raise RuntimeError(f"Open-Meteo błąd {r.status_code}: {r.text[:300]}")
-    daily = r.json().get("daily", {})
+    daily = om_get("forecast", params, CACHE_TTL_FORECAST_S).get("daily", {})
     dates = daily.get("time") or []
     precs = daily.get("precipitation_sum") or []
     et0s = daily.get("et0_fao_evapotranspiration") or []
+    tmaxs = daily.get("temperature_2m_max") or []
+    vpds = daily.get("vapour_pressure_deficit_max") or []
     today = date.today()
     out = []
     for i, d_str in enumerate(dates):
@@ -229,9 +321,104 @@ def fetch_recent_and_forecast(geom_4326, past_days: int = 92,
             "date": d,
             "precip_mm": precs[i] if i < len(precs) else None,
             "et0_mm": et0s[i] if i < len(et0s) else None,
+            "tmax_c": tmaxs[i] if i < len(tmaxs) else None,
+            "vpd_max_kpa": vpds[i] if i < len(vpds) else None,
             "is_forecast": d > today,
         })
     return out
+
+
+# ---------------------------------------------------------------------------
+# Norma wieloletnia (1991–2020) — czy bieżący bilans P−ET0 jest nietypowy
+# ---------------------------------------------------------------------------
+#
+# Samo "−35 mm w 30 dni" nic nie mówi bez kontekstu: w lipcu to norma, w
+# kwietniu — susza. Porównujemy bieżący 30-dniowy bilans z rozkładem
+# bilansów z tego samego okresu roku w latach 1991–2020 (ERA5, ten sam
+# punkt siatki). Wynik: percentyl empiryczny (idea jak w SPEI, bez
+# dopasowania rozkładu log-logistycznego — przy 90 próbkach empiryczny
+# percentyl jest wystarczający i łatwy do wyjaśnienia rolnikowi).
+CLIMATE_START = date(1991, 1, 1)
+CLIMATE_END = date(2020, 12, 31)
+CLIMATE_SHIFTS_DAYS = (-7, 0, 7)   # 3 okna na rok -> 90 próbek
+CLIMATE_MIN_SAMPLES = 30
+VPD_HIGH_KPA = 3.0                 # wysokie zapotrzebowanie atmosfery (roboczo)
+HEAT_TMAX_C = 35.0                 # dzień upalny — próg stresu cieplnego m.in. bawełny (roboczo)
+
+
+def fetch_climatology(lat: float, lon: float) -> dict:
+    """{data: P − ET0 [mm]} dla 1991–2020 w punkcie (zaokrąglonym do 0.1°,
+    czyli rozdzielczości ERA5-Land). Jedno zapytanie, w pamięci podręcznej rok."""
+    params = {"latitude": round(float(lat), 1), "longitude": round(float(lon), 1),
+              "start_date": CLIMATE_START.isoformat(), "end_date": CLIMATE_END.isoformat(),
+              "daily": "precipitation_sum,et0_fao_evapotranspiration", "timezone": "auto"}
+    daily = om_get("archive", params, CACHE_TTL_CLIMATE_S, timeout=90).get("daily", {})
+    out = {}
+    for d_str, p, e in zip(daily.get("time") or [], daily.get("precipitation_sum") or [],
+                           daily.get("et0_fao_evapotranspiration") or []):
+        if p is None or e is None:
+            continue
+        out[date.fromisoformat(d_str)] = p - e
+    return out
+
+
+def _same_day_in_year(d: date, year: int) -> date:
+    try:
+        return d.replace(year=year)
+    except ValueError:          # 29 lutego w roku nieprzestępnym
+        return d.replace(year=year, day=28)
+
+
+def cwb_percentile(value: Optional[float], end_date: date, days: int, clim: dict) -> Optional[float]:
+    """Percentyl (0-100) bilansu `value` z `days` dni kończących się w
+    `end_date` na tle tego samego okresu roku w normie wieloletniej."""
+    if value is None or not clim:
+        return None
+    samples = []
+    for year in range(CLIMATE_START.year, CLIMATE_END.year + 1):
+        for shift in CLIMATE_SHIFTS_DAYS:
+            e = _same_day_in_year(end_date, year) + timedelta(days=shift)
+            vals = [clim.get(e - timedelta(days=k)) for k in range(days)]
+            if all(v is not None for v in vals):
+                samples.append(sum(vals))
+    if len(samples) < CLIMATE_MIN_SAMPLES:
+        return None
+    below = sum(1 for x in samples if x < value)
+    equal = sum(1 for x in samples if x == value)
+    return round(100.0 * (below + 0.5 * equal) / len(samples), 1)
+
+
+def cwb_class(pct: Optional[float]) -> Optional[str]:
+    """Słowny opis percentyla bilansu (jak klasy suszy w SPEI)."""
+    if pct is None:
+        return None
+    if pct <= 10:
+        return "wyjątkowo sucho"
+    if pct <= 20:
+        return "sucho"
+    if pct >= 90:
+        return "wyjątkowo mokro"
+    if pct >= 80:
+        return "mokro"
+    return "w normie"
+
+
+def forecast_summary(series: list, today: date, days: int = 7) -> Optional[dict]:
+    """Podsumowanie prognozy na `days` dni od jutra (z fetch_recent_and_forecast):
+    suma opadu i ET0, maks. temperatura i VPD, liczba dni upalnych oraz
+    flaga 'sucho i gorąco' (mało deszczu + upał albo wysokie VPD)."""
+    fut = [r for r in series if today < r["date"] <= today + timedelta(days=days)]
+    if not fut:
+        return None
+    p = sum(r.get("precip_mm") or 0.0 for r in fut)
+    e = sum(r.get("et0_mm") or 0.0 for r in fut)
+    tmax = max((r["tmax_c"] for r in fut if r.get("tmax_c") is not None), default=None)
+    vpd = max((r["vpd_max_kpa"] for r in fut if r.get("vpd_max_kpa") is not None), default=None)
+    heat_days = sum(1 for r in fut if (r.get("tmax_c") or -99) >= HEAT_TMAX_C)
+    dry_hot = p < 5.0 and (heat_days > 0 or (vpd is not None and vpd >= VPD_HIGH_KPA))
+    return {"days": len(fut), "precip_mm": round(p, 1), "et0_mm": round(e, 1),
+            "cwb_mm": round(p - e, 1), "tmax_c": tmax, "vpd_max_kpa": vpd,
+            "heat_days": heat_days, "dry_hot": dry_hot}
 
 
 def detect_frost_dates(weather_series: list[dict], threshold_c: float = FROST_TMIN_C) -> set:

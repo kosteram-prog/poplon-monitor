@@ -31,10 +31,11 @@ router = APIRouter(prefix="/api/water", tags=["water"])
 class WaterFieldAddRequest(BaseModel):
     parcel_id: str = Field(..., min_length=3, max_length=60)
     irrigation_mode: str = Field(..., pattern="^(irrigation|rainfed)$")
-    geometry_wkt: str = Field(
-        ..., description="Geometria pola w WKT, WGS84 (EPSG:4326). Wymagana "
-        "wprost (nie doczytywana z ULDK jak w monitored_parcels) — pola poza "
-        "Polską (np. Uzbekistan) nie mają numeru działki w GUGiK.")
+    geometry_wkt: Optional[str] = Field(
+        None, description="Geometria pola w WKT, WGS84 (EPSG:4326). Może być "
+        "pusta, gdy parcel_id to numer(y) działek ewidencyjnych z Polski "
+        "(oddzielone przecinkiem) — wtedy obrys pobierany jest z ULDK. Dla pól "
+        "poza Polską (np. Uzbekistan) wymagana.")
     region: Optional[str] = Field(
         None, description="Klucz kohorty do porównań międzypolowych w silniku "
         "anomalii (patrz water_stress.get_cohort_fields) — pola z tym samym "
@@ -46,6 +47,9 @@ class WaterFieldAddRequest(BaseModel):
         None, gt=0, le=400, description="Retencja użyteczna strefy korzeniowej [mm] "
         "do bilansu wodnego (np. piasek ~50, glina pylasta ~150). Puste = 100 mm.")
     sowing_date: Optional[str] = Field(None, description="RRRR-MM-DD — start bilansu wodnego")
+    split_parcels: bool = Field(
+        False, description="Kilka numerów działek w parcel_id = kilka OSOBNYCH pól "
+        "(zamiast jednego pola złożonego z kilku działek)")
     farmer_phone: Optional[str] = None
     farmer_name: Optional[str] = None
     notes: Optional[str] = None
@@ -65,12 +69,27 @@ class WaterFieldAddRequest(BaseModel):
     @classmethod
     def _validate_geometry_wkt(cls, v):
         from shapely import wkt as shapely_wkt
+        if v is None or not str(v).strip():
+            return None
         try:
             geom = shapely_wkt.loads(v)
         except Exception as e:
             raise ValueError(f"Nieprawidlowa geometria WKT: {e}")
         if geom.is_empty:
             raise ValueError("geometry_wkt nie moze byc puste")
+        if geom.geom_type not in ("Polygon", "MultiPolygon"):
+            raise ValueError("geometry_wkt musi byc poligonem (POLYGON albo MULTIPOLYGON)")
+        if not geom.is_valid:
+            # Np. obrys narysowany "ósemką" albo nachodzące na siebie części —
+            # naprawiamy zamiast odrzucać; zostają tylko części powierzchniowe.
+            from shapely import make_valid
+            from shapely.geometry import MultiPolygon, Polygon
+            fixed = make_valid(geom)
+            parts = [g for g in getattr(fixed, "geoms", [fixed]) if isinstance(g, (Polygon, MultiPolygon))]
+            if not parts:
+                raise ValueError("Nie da sie naprawic geometrii pola")
+            from shapely.ops import unary_union
+            return unary_union(parts).wkt
         return v
 
 
@@ -178,10 +197,171 @@ def _get_plan_or_404(plan_id: int) -> dict:
 
 @router.post("/field/add")
 def water_field_add(req: WaterFieldAddRequest, _auth=Depends(require_operator_key)):
+    import water_geometry as wg
+    from shapely import wkt as shapely_wkt
     kwargs = {k: v for k, v in req.model_dump().items()
-              if k not in ("parcel_id", "irrigation_mode", "geometry_wkt") and v is not None}
-    field_id = db.add_water_field(req.parcel_id, req.irrigation_mode, req.geometry_wkt, **kwargs)
-    return {"id": field_id, "parcel_id": req.parcel_id, "status": "added"}
+              if k not in ("parcel_id", "irrigation_mode", "geometry_wkt", "split_parcels")
+              and v is not None}
+    active = {f["parcel_id"] for f in db.get_water_fields(status="active")}
+
+    if req.split_parcels and not req.geometry_wkt and len(wg.split_parcel_ids(req.parcel_id)) > 1:
+        # Kilka numerów działek -> kilka osobnych pól (obrys każdej z ULDK).
+        added, skipped = [], []
+        for pid in wg.split_parcel_ids(req.parcel_id):
+            if pid in active:
+                skipped.append(pid)
+                continue
+            wkt = _geometry_from_uldk_or_422(pid)
+            added.append({"id": db.add_water_field(pid, req.irrigation_mode, wkt, **kwargs),
+                          "parcel_id": pid})
+            active.add(pid)
+        return {"status": "added", "added": added, "skipped_existing": skipped,
+                "geometry_source": "uldk"}
+
+    pid = req.parcel_id.strip()
+    if pid in active:
+        raise HTTPException(status_code=409, detail=f"Pole „{pid}” jest już w module wodnym.")
+    geometry_wkt, source = req.geometry_wkt, "manual"
+    if not geometry_wkt:
+        geometry_wkt = _geometry_from_uldk_or_422(pid)
+        source = "uldk"
+    try:
+        wg.check_field_extent(shapely_wkt.loads(geometry_wkt))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    field_id = db.add_water_field(pid, req.irrigation_mode, geometry_wkt, **kwargs)
+    return {"id": field_id, "parcel_id": pid, "status": "added",
+            "geometry_source": source}
+
+
+def _geometry_from_uldk_or_422(parcel_id: str) -> str:
+    import core
+    import water_geometry as wg
+    if not wg.is_polish_parcel_ids(parcel_id):
+        raise HTTPException(status_code=422, detail=(
+            "Brak geometrii pola. Dla polskich działek podaj numer TERYT "
+            "(np. 141201_1.0001.6509, kilka oddziel przecinkiem), dla innych pól "
+            "zaznacz obrys na mapie albo wklej WKT."))
+    try:
+        return wg.geometry_from_parcel_ids(parcel_id)["geometry_wkt"]
+    except core.AppError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/parcel_lookup")
+def water_parcel_lookup(ids: str):
+    """Obrys pola z ULDK dla numeru (numerów) działek — podgląd przed dodaniem."""
+    import core
+    import water_geometry as wg
+    if not wg.is_polish_parcel_ids(ids):
+        raise HTTPException(status_code=422, detail="To nie wygląda na numer działki TERYT "
+                            "(np. 141201_1.0001.6509).")
+    try:
+        return wg.geometry_from_parcel_ids(ids)
+    except core.AppError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/parcel_at")
+def water_parcel_at(lat: float, lon: float):
+    """Działka ewidencyjna w klikniętym punkcie mapy (ULDK, tylko Polska)."""
+    import core
+    import water_geometry as wg
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(status_code=422, detail="Nieprawidłowe współrzędne.")
+    try:
+        geom, meta = core.fetch_parcel_at_point(lon, lat)
+    except core.AppError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"parcel_id": meta.get("parcel_id"), "geometry_wkt": geom.wkt,
+            "area_ha": wg.area_ha(geom), "gmina": meta.get("gmina")}
+
+
+@router.get("/field_at")
+def water_field_at(lat: float, lon: float, source: str = "auto"):
+    """Gotowy obrys pola w klikniętym punkcie mapy.
+    source=auto: w Polsce działka ewidencyjna z ULDK, poza Polską pole z
+    Fields of The World (globalna mapa granic pól z Sentinel-2);
+    source=ftw: zawsze FTW (także w Polsce — pole uprawne zamiast działki);
+    source=uldk: zawsze ULDK."""
+    import core
+    import water_geometry as wg
+    if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+        raise HTTPException(status_code=422, detail="Nieprawidłowe współrzędne.")
+    if source not in ("auto", "ftw", "uldk"):
+        raise HTTPException(status_code=422, detail="source: auto | ftw | uldk")
+    use_uldk = source == "uldk" or (source == "auto" and wg.in_poland_bbox(lon, lat))
+    if use_uldk:
+        try:
+            geom, meta = core.fetch_parcel_at_point(lon, lat)
+        except core.AppError as e:
+            raise HTTPException(status_code=404, detail=str(e))
+        return {"source": "uldk", "parcel_id": meta.get("parcel_id"), "geometry_wkt": geom.wkt,
+                "area_ha": wg.area_ha(geom), "gmina": meta.get("gmina")}
+    countries = wg.ftw_candidate_countries(lon, lat)
+    if not countries:
+        raise HTTPException(status_code=404, detail=(
+            "Gotowe obrysy pól są dostępne w Polsce (ULDK) oraz w Uzbekistanie, Tadżykistanie, "
+            "Kirgistanie, Turkmenistanie i Kazachstanie (Fields of The World). "
+            "Tutaj narysuj obrys ręcznie."))
+    try:
+        hit = wg.ftw_field_at(lon, lat)
+    except Exception as e:
+        log.warning("FTW niedostępne (%s, %s): %s", lat, lon, e)
+        raise HTTPException(status_code=502, detail=f"Baza obrysów pól (FTW) niedostępna: {e}")
+    if hit is None:
+        raise HTTPException(status_code=404, detail=(
+            "W tym miejscu baza Fields of The World nie ma pola (zabudowa, droga albo pole "
+            "nierozpoznane przez model). Narysuj obrys ręcznie."))
+    return hit
+
+
+class WaterFieldImportRequest(BaseModel):
+    filename: str = Field(..., max_length=200)
+    content: str = Field(..., max_length=20_000_000)
+    irrigation_mode: str = Field("rainfed", pattern="^(irrigation|rainfed)$",
+                                 description="Domyślny tryb dla pól bez kolumny irrigation_mode")
+    region: Optional[str] = Field(None, max_length=80)
+    crop_type: Optional[str] = Field(None, max_length=40)
+
+
+@router.post("/field/import")
+def water_field_import(req: WaterFieldImportRequest, _auth=Depends(require_operator_key)):
+    """Import wielu pól z GeoJSON/CSV (water_geometry.parse_fields_text).
+    Pola bez geometrii z polskim numerem działki dostają obrys z ULDK.
+    Pola, których parcel_id już jest aktywne w module, są pomijane."""
+    import core
+    import water_geometry as wg
+    try:
+        parsed = wg.parse_fields_text(req.filename, req.content)
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Nie udało się odczytać pliku: {e}")
+    active = {f["parcel_id"] for f in db.get_water_fields(status="active")}
+    added, skipped, errors = [], [], []
+    for f in parsed:
+        pid = f["parcel_id"]
+        if pid in active:
+            skipped.append({"parcel_id": pid, "reason": "już jest w module"})
+            continue
+        wkt = f.get("geometry_wkt")
+        try:
+            if not wkt:
+                if not wg.is_polish_parcel_ids(pid):
+                    raise core.AppError("brak geometrii, a ID nie jest numerem działki z ULDK")
+                wkt = wg.geometry_from_parcel_ids(pid)["geometry_wkt"]
+            extra = {k: f[k] for k in wg.FIELD_PROPS if f.get(k) not in (None, "")}
+            if req.region and "region" not in extra:
+                extra["region"] = req.region
+            if req.crop_type and "crop_type" not in extra:
+                extra["crop_type"] = req.crop_type
+            from shapely import wkt as shapely_wkt
+            wg.check_field_extent(shapely_wkt.loads(wkt), label=f"Pole {pid}")
+            fid = db.add_water_field(pid, f.get("irrigation_mode") or req.irrigation_mode, wkt, **extra)
+            added.append({"id": fid, "parcel_id": pid})
+            active.add(pid)
+        except Exception as e:
+            errors.append({"parcel_id": pid, "error": str(e)})
+    return {"added": added, "skipped": skipped, "errors": errors}
 
 
 @router.get("/field/list")
@@ -317,21 +497,86 @@ def water_observations_list(water_field_id: int):
     return db.get_water_observations(water_field_id)
 
 
+class RainReadingRequest(BaseModel):
+    reading_date: str = Field(..., description="RRRR-MM-DD")
+    precip_mm: float = Field(..., ge=0, le=500)
+    notes: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("reading_date")
+    @classmethod
+    def _validate_reading_date(cls, v):
+        try:
+            d = date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("reading_date musi być w formacie RRRR-MM-DD")
+        if d > date.today():
+            raise ValueError("reading_date nie może być z przyszłości")
+        return v
+
+
+@router.post("/field/{water_field_id}/rain")
+def rain_reading_add(water_field_id: int, req: RainReadingRequest,
+                     _auth=Depends(require_operator_key)):
+    """Odczyt deszczomierza rolnika. W bilansie wodnym zastępuje opad z
+    modelu pogodowego w danym dniu (patrz water_balance.apply_rain_gauge)."""
+    _get_field_or_404(water_field_id)
+    rid = db.add_rain_reading(water_field_id, req.reading_date, req.precip_mm, req.notes)
+    return {"id": rid, "status": "added"}
+
+
+@router.get("/field/{water_field_id}/rain")
+def rain_reading_list(water_field_id: int):
+    _get_field_or_404(water_field_id)
+    return db.get_rain_readings(water_field_id)
+
+
+@router.delete("/rain/{reading_id}")
+def rain_reading_delete(reading_id: int, _auth=Depends(require_operator_key)):
+    if not db.delete_rain_reading(reading_id):
+        raise HTTPException(status_code=404, detail="Nie ma takiego odczytu")
+    return {"status": "deleted"}
+
+
 class BackfillRequest(BaseModel):
-    days: int = Field(90, ge=7, le=365, description="Ile dni wstecz uzupełnić")
+    days: int = Field(90, ge=7, le=365, description="Ile dni wstecz uzupełnić (gdy brak dat)")
+    date_from: Optional[str] = Field(None, description="RRRR-MM-DD — początek okresu")
+    date_to: Optional[str] = Field(None, description="RRRR-MM-DD — koniec okresu (domyślnie dziś)")
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def _validate_dates(cls, v):
+        if v in (None, ""):
+            return None
+        try:
+            date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("Data musi być w formacie RRRR-MM-DD")
+        return v
+
+
+BACKFILL_MAX_DAYS = 400
 
 
 @router.post("/field/{water_field_id}/backfill")
 def water_field_backfill(water_field_id: int, req: BackfillRequest,
                          _auth=Depends(require_operator_key)):
-    """Uzupełnia historię obserwacji pola wstecz (water_replay.backfill_field),
-    żeby anomalia względem własnej historii działała od razu, a nie po kilku
-    tygodniach. Kosztuje PU (jedno zapytanie S2 + jedno S1 na cały okres)."""
+    """Uzupełnia historię obserwacji pola (water_replay.backfill_field) —
+    ostatnie `days` dni albo dowolny okres date_from..date_to (np. cały
+    sezon kwiecień–wrzesień do powtórki). Kosztuje PU (jedno zapytanie S2 +
+    jedno S1 na cały okres)."""
     field = _get_field_or_404(water_field_id)
     import water_replay
-    t_end = date.today()
+    t_end = date.fromisoformat(req.date_to) if req.date_to else date.today()
+    t_end = min(t_end, date.today())
+    t_start = date.fromisoformat(req.date_from) if req.date_from else t_end - timedelta(days=req.days)
+    if t_start >= t_end:
+        raise HTTPException(status_code=422, detail="Początek okresu musi być przed końcem.")
+    if (t_end - t_start).days > BACKFILL_MAX_DAYS:
+        raise HTTPException(status_code=422, detail=f"Okres dłuższy niż {BACKFILL_MAX_DAYS} dni — podziel go na części.")
     try:
-        return water_replay.backfill_field(field, t_end - timedelta(days=req.days), t_end)
+        res = water_replay.backfill_field(field, t_start, t_end)
+        res.update({"date_from": t_start.isoformat(), "date_to": t_end.isoformat()})
+        return res
     except Exception as e:
         log.exception("Blad backfill dla pola wodnego id=%s", water_field_id)
         raise HTTPException(status_code=502, detail=f"Blad uzupelniania historii: {e}")
@@ -357,6 +602,46 @@ def water_field_replay(water_field_id: int, with_balance: bool = False):
             except Exception as e:
                 log.warning("Pogoda niedostepna dla replay pola id=%s: %s", water_field_id, e)
     return water_replay.replay_field(field, weather_series=wx)
+
+
+class ReplayRatingRequest(BaseModel):
+    obs_date: str = Field(..., description="RRRR-MM-DD")
+    rating: str = Field(..., pattern="^(confirmed|rejected|missed|unsure)$")
+    risk_type: Optional[str] = Field(None, max_length=60)
+    note: Optional[str] = Field(None, max_length=1000)
+
+
+@router.post("/field/{water_field_id}/replay_rating")
+def water_replay_rate(water_field_id: int, req: ReplayRatingRequest,
+                      _auth=Depends(require_operator_key)):
+    """Ocena wyniku powtórki: alarm trafny / fałszywy albo przeoczony problem."""
+    field = _get_field_or_404(water_field_id)
+    import water_replay
+    try:
+        return water_replay.rate_replay(field, req.obs_date, req.rating,
+                                        risk_type=req.risk_type or "", note=req.note)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+
+@router.get("/replay_ratings")
+def water_replay_ratings(water_field_id: Optional[int] = None):
+    return db.get_replay_ratings(water_field_id)
+
+
+@router.delete("/replay_rating/{rating_id}")
+def water_replay_rating_delete(rating_id: int, _auth=Depends(require_operator_key)):
+    if not db.delete_replay_rating(rating_id):
+        raise HTTPException(status_code=404, detail="Nie ma takiej oceny")
+    return {"status": "deleted"}
+
+
+@router.get("/calibration/suggest_from_replay")
+def water_calibration_suggest_from_replay():
+    """Sugestia progu z ocen powtórki (oba rodzaje błędów). Zastosowanie —
+    jak dotąd: POST /api/water/calibration/apply."""
+    import water_replay
+    return water_replay.suggest_threshold_from_ratings()
 
 
 @router.get("/field/{water_field_id}/balance")

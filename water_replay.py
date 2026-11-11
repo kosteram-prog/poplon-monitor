@@ -24,7 +24,8 @@ pola.geojson: poligony w WGS84 albo z polem "crs" (np. EPSG:2180);
 właściwości (opcjonalne): parcel_id / id / name, irrigation_mode
 (irrigation|rainfed, domyślnie rainfed), region, crop_type, soil_taw_mm,
 sowing_date. Zamiast GeoJSON można podać CSV z kolumną "wkt" (WGS84) i tymi
-samymi kolumnami. Wynik: katalog replay_wyniki/ z obserwacje.csv,
+samymi kolumnami; dla polskich działek kolumna wkt może być pusta — obrys
+zostanie pobrany z ULDK po numerze działki (parcel_id). Wynik: katalog replay_wyniki/ z obserwacje.csv,
 alarmy.csv i podsumowanie.txt.
 
 Koszt: na pole jedno zapytanie Statistical API S2 i jedno S1 na cały okres
@@ -86,6 +87,8 @@ def _balance_by_date(field: dict, observations: list, events: list, weather_seri
     import water_balance as wb
     if not weather_series:
         return {}
+    weather_series = [dict(w) for w in weather_series]
+    wb.apply_rain_gauge(weather_series, db.get_rain_readings(field["id"]))
     kcb_max, p, _ = wb.crop_params(field.get("crop_type"))
     taw = float(field.get("soil_taw_mm") or wb.DEFAULT_TAW_MM)
     ndvi_points = [(date.fromisoformat(o["obs_date"]), o["ndvi_mean"])
@@ -171,8 +174,11 @@ def replay_field(field: dict, weather_series: Optional[list] = None) -> dict:
             "vv_db": obs.get("vv_db"), "s1_orbit": obs.get("s1_rel_orbit"),
             "cwb_14d_mm": obs.get("cwb_14d_mm"),
             "z_ndmi": z("own_ndwi"), "z_ndmi_residual": z("own_ndwi_residual"), "z_vv": z("own_vv"),
+            "delta_ndmi": (comp.get("own_ndwi") or {}).get("delta"),
             "risk_flag": verdict.get("risk_flag"), "risk_type": verdict.get("risk_type"),
             "phenology_explained": verdict.get("phenology_explained"),
+            "harvest_like": verdict.get("harvest_like"),
+            "canopy_present": verdict.get("canopy_present"),
             "balance_depletion_mm": bal["depletion_mm"] if bal else None,
             "balance_raw_mm": bal["raw_mm"] if bal else None,
             "balance_status": bal["status"] if bal else None,
@@ -195,61 +201,118 @@ def replay_field(field: dict, weather_series: Optional[list] = None) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# 3. Wczytywanie pól (GeoJSON / CSV) i CLI
+# 3. Oceny powtórki i kalibracja progu z obu rodzajów błędów
 # ---------------------------------------------------------------------------
 
-FIELD_PROPS = ("region", "crop_type", "soil_taw_mm", "sowing_date")
+RATING_MIN_POSITIVES = 3
+RATING_MIN_NEGATIVES = 3
+THRESHOLD_GRID = [round(-4.0 + 0.1 * i, 1) for i in range(36)]   # -4.0 .. -0.5
 
 
-def _to_wgs84(geom, crs_name: Optional[str]):
-    if not crs_name or crs_name.upper() in ("EPSG:4326", "OGC:CRS84", "CRS84",
-                                             "URN:OGC:DEF:CRS:OGC:1.3:CRS84"):
-        return geom
-    from pyproj import Transformer
-    from shapely.ops import transform
-    code = crs_name.split("::")[-1] if "::" in crs_name else crs_name
-    if code.isdigit():
-        code = f"EPSG:{code}"
-    tr = Transformer.from_crs(code, "EPSG:4326", always_xy=True).transform
-    return transform(tr, geom)
+def rate_replay(field: dict, obs_date: str, rating: str, risk_type: str = "",
+                note: Optional[str] = None) -> dict:
+    """Zapisuje ocenę doradcy dla obserwacji z powtórki razem z metrykami
+    silnika z tego dnia (z-score NDMI, rezyduum, NDVI, bramki łan/zbiór) —
+    kalibracja liczy na tych liczbach, a nie na samym fakcie alarmu.
+    Dla 'missed' bierze obserwację najbliższą wskazanej dacie (±3 dni)."""
+    rows = replay_field(field)["rows"]
+    if not rows:
+        raise ValueError("Pole nie ma jeszcze historii obserwacji — najpierw uzupełnij historię.")
+    target = date.fromisoformat(obs_date)
+    row = min(rows, key=lambda r: abs((date.fromisoformat(r["obs_date"]) - target).days))
+    if abs((date.fromisoformat(row["obs_date"]) - target).days) > 3:
+        raise ValueError("Brak obserwacji satelitarnej w ciągu 3 dni od wskazanej daty.")
+    if rating == "missed":
+        if row.get("risk_flag"):
+            raise ValueError(f"W dniu {row['obs_date']} silnik już sygnalizował problem — "
+                             f"oceń ten alarm jako trafny zamiast dopisywać przeoczenie.")
+        risk_type = ""   # przeoczenie to osobny wpis, nie nadpisuje oceny alarmu
+    metrics = {k: row.get(k) for k in ("ndmi", "ndvi", "delta_ndmi", "z_ndmi", "z_ndmi_residual",
+                                       "z_vv", "cwb_14d_mm", "risk_flag", "risk_type",
+                                       "phenology_explained", "harvest_like", "canopy_present")}
+    if rating != "missed":
+        risk_type = risk_type or (row.get("risk_type") or "")
+    return db.upsert_replay_rating(field["id"], row["obs_date"], rating,
+                                   risk_type=risk_type,
+                                   metrics_json=json.dumps(metrics), note=note)
 
 
-def load_fields(path: str) -> list:
-    """Lista pól {parcel_id, irrigation_mode, geometry_wkt, region, ...}."""
-    from shapely.geometry import shape
-    from shapely import wkt as shapely_wkt
-    out = []
-    if path.lower().endswith((".geojson", ".json")):
-        with open(path, encoding="utf-8") as f:
-            gj = json.load(f)
-        crs_name = ((gj.get("crs") or {}).get("properties") or {}).get("name")
-        feats = gj["features"] if gj.get("type") == "FeatureCollection" else [gj]
-        for i, ft in enumerate(feats, 1):
-            props = ft.get("properties") or {}
-            geom = _to_wgs84(shape(ft["geometry"]), crs_name)
-            out.append(_field_from_props(props, geom.wkt, i))
-    else:
-        with open(path, encoding="utf-8-sig", newline="") as f:
-            for i, row in enumerate(csv.DictReader(f), 1):
-                wkt = row.get("wkt") or row.get("WKT") or row.get("geometry_wkt")
-                if not wkt:
-                    raise ValueError(f"Wiersz {i}: brak kolumny 'wkt'")
-                shapely_wkt.loads(wkt)
-                out.append(_field_from_props(row, wkt, i))
+def _confusion(pos_z: list, neg_z: list, thr: float) -> dict:
+    tp = sum(1 for z in pos_z if z <= thr)
+    fn = len(pos_z) - tp
+    fp = sum(1 for z in neg_z if z <= thr)
+    prec = tp / (tp + fp) if tp + fp else 0.0
+    rec = tp / (tp + fn) if tp + fn else 0.0
+    f1 = 2 * prec * rec / (prec + rec) if prec + rec else 0.0
+    return {"threshold": thr, "tp": tp, "fp": fp, "fn": fn,
+            "precision": round(prec, 3), "recall": round(rec, 3), "f1": round(f1, 3)}
+
+
+def suggest_threshold_from_ratings(ratings: Optional[list] = None) -> dict:
+    """Sugestia Z_SCORE_RISK_THRESHOLD z ocen powtórki. Pozytywy = alarmy
+    trafne + przeoczone problemy, negatywy = alarmy fałszywe. Wybór progu
+    o najlepszym F1 (przy remisie — bliższy obecnemu). Dotyczy tylko alarmów
+    spadku wilgotności (nie równomierności ani bilansu)."""
+    if ratings is None:
+        ratings = db.get_replay_ratings()
+    pos, neg, blocked = [], [], []
+    for r in ratings:
+        if r.get("risk_type") in ws.NON_DECLINE_RISK_TYPES:
+            continue
+        try:
+            m = json.loads(r.get("metrics_json") or "{}")
+        except ValueError:
+            continue
+        z = m.get("z_ndmi")
+        if z is None:
+            continue
+        if r["rating"] in ("confirmed", "missed"):
+            pos.append(z)
+            # Przeoczony problem, choć z-score przekroczył próg: zablokowała go
+            # inna reguła (brak łanu, zbiór, rezyduum, min. spadek) — próg z
+            # tego nie naprawi, trzeba przejrzeć regułę.
+            if r["rating"] == "missed" and z <= ws.Z_SCORE_RISK_THRESHOLD:
+                blocked.append({"water_field_id": r["water_field_id"], "obs_date": r["obs_date"],
+                                "z_ndmi": z, "canopy_present": m.get("canopy_present"),
+                                "harvest_like": m.get("harvest_like"),
+                                "phenology_explained": m.get("phenology_explained")})
+        elif r["rating"] == "rejected":
+            neg.append(z)
+    current = ws.Z_SCORE_RISK_THRESHOLD
+    out = {"positives": len(pos), "negatives": len(neg), "current_threshold": current,
+           "blocked_by_other_rules": blocked,
+           "min_positives": RATING_MIN_POSITIVES, "min_negatives": RATING_MIN_NEGATIVES}
+    if len(pos) < RATING_MIN_POSITIVES or len(neg) < RATING_MIN_NEGATIVES:
+        out["status"] = "not_enough_data"
+        return out
+    grid = [_confusion(pos, neg, t) for t in THRESHOLD_GRID]
+    best = max(grid, key=lambda g: (g["f1"], -abs(g["threshold"] - current)))
+    out.update({"status": "ok", "suggested_threshold": best["threshold"],
+                "at_suggested": best, "at_current": _confusion(pos, neg, current)})
     return out
 
 
-def _field_from_props(props: dict, wkt: str, i: int) -> dict:
-    pid = str(props.get("parcel_id") or props.get("id") or props.get("name") or f"pole-{i}")
-    mode = (props.get("irrigation_mode") or "rainfed").strip().lower()
-    if mode not in ("irrigation", "rainfed"):
-        mode = "irrigation" if mode in ("irygacyjny", "nawadniane", "irrigated") else "rainfed"
-    f = {"parcel_id": pid, "irrigation_mode": mode, "geometry_wkt": wkt}
-    for k in FIELD_PROPS:
-        v = props.get(k)
-        if v not in (None, ""):
-            f[k] = float(v) if k == "soil_taw_mm" else str(v)
-    return f
+# ---------------------------------------------------------------------------
+# 4. Wczytywanie pól (GeoJSON / CSV) i CLI
+# ---------------------------------------------------------------------------
+
+from water_geometry import FIELD_PROPS  # noqa: E402
+
+
+def load_fields(path: str) -> list:
+    """Pola z GeoJSON/CSV (water_geometry.parse_fields_text). Pola bez
+    geometrii z polskim numerem działki dostają obrys z ULDK; tryb domyślnie
+    'rainfed'."""
+    import water_geometry as wg
+    out = []
+    for f in wg.load_fields(path):
+        if not f.get("geometry_wkt"):
+            if not wg.is_polish_parcel_ids(f["parcel_id"]):
+                raise ValueError(f"Pole {f['parcel_id']}: brak geometrii i to nie jest numer działki z ULDK")
+            f["geometry_wkt"] = wg.geometry_from_parcel_ids(f["parcel_id"])["geometry_wkt"]
+        f["irrigation_mode"] = f.get("irrigation_mode") or "rainfed"
+        out.append(f)
+    return out
 
 
 def _write_csv(path: str, rows: list):

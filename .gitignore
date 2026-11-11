@@ -24,8 +24,13 @@ secrets.json
 
 # Database
 *.db
+*.db-shm
+*.db-wal
 *.sqlite
 *.sqlite3
+
+# Wygenerowane mapy plonu i wgrane pliki
+uploads/
 
 # Logs
 *.log
