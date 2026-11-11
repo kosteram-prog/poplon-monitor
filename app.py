@@ -7,8 +7,9 @@ Uruchomienie:
 Aplikacja: http://127.0.0.1:8000
 """
 from dotenv import load_dotenv
+from pathlib import Path
 import os
-load_dotenv()
+load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
 import logging
 import threading
 import time
@@ -28,6 +29,7 @@ import db
 from auth import require_operator_key
 from photo_handler import router as photo_router
 from calibration import router as calibration_router
+from irrigation_log import router as irrigation_router
 
 Path("uploads/photos").mkdir(parents=True, exist_ok=True)
 
@@ -39,6 +41,13 @@ async def lifespan(app: FastAPI):
 
     # --- kalibrowalne progi NDVI z bazy (jeśli operator je kiedyś zmienił) ---
     core.reload_thresholds()
+
+    # --- kalibrowalny prog anomalii wodnej (jesli operator go kiedys zmienil) ---
+    try:
+        from water_stress import reload_water_threshold
+        reload_water_threshold()
+    except Exception as e:
+        print(f"[WARN] reload_water_threshold: {e}")
 
     # --- kalibrowalne wagi Confidence Score z bazy (jeśli operator je zmienił) ---
     from analytics import reload_weights
@@ -86,6 +95,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Weryfikacja poplonów NDVI", lifespan=lifespan)
 app.include_router(photo_router)
 app.include_router(calibration_router)
+app.include_router(irrigation_router)
 
 log = logging.getLogger("app")
 
@@ -161,13 +171,14 @@ def api_satellite_image(req: SatelliteImageRequest):
 # ---------------------------------------------------------------------------
 
 MAX_BATCH_ITEMS = 200
-# Konfigurowalne przez env — domyślnie zostaje 3, bo każda pozycja batcha od
-# teraz i tak sama odpala 2 równoległe wywołania Sentinel Hub (NDVI + multi/S1,
-# patrz _process_one), więc realne obciążenie Sentinel Hub już się podwoiło
-# przy tej samej wartości. Podnoszenie tego dalej zależy od limitu
-# równoczesnych requestów w planie Sentinel Hub użytkownika — stąd env var
-# zamiast twardo zaszytej, wyższej domyślnej wartości.
-BATCH_CONCURRENCY = int(os.environ.get("BATCH_CONCURRENCY", "3"))
+# Konfigurowalne przez env. Optymalizacja (listopad 2026): domyślnie 6
+# (dawniej 3). Działka kosztuje teraz ~2 zapytania i ~2 PU zamiast 3 zapytań
+# i 5-14 PU (NDVI liczony z zapytania wielowskaźnikowego, UTM, wyjścia
+# 16-bit), a sentinel1._post_with_retry sam pilnuje budżetu PU/zapytań na
+# minutę i honoruje Retry-After — więcej równoległych działek nie grozi już
+# seriami 429. Liczbę zapytań "w locie" i tak ogranicza
+# SENTINEL_HUB_MAX_CONCURRENT.
+BATCH_CONCURRENCY = int(os.environ.get("BATCH_CONCURRENCY", "6"))
 JOB_TTL_SECONDS = 3600
 MAX_CONCURRENT_BATCH_JOBS = 3       # ile batchy naraz mogą walić w Sentinel Hub
 PURGE_INTERVAL_SECONDS = 300        # czyść stare zadania nawet gdy nikt nowych nie startuje
@@ -335,15 +346,26 @@ def _process_one(job_id: str, idx: int):
 
 
 def _run_batch(job_id: str):
+    from sentinel1 import pu_stats
     with _jobs_lock:
         job = _jobs[job_id]
         n = len(job["items"])
+    t0 = time.time()
+    stats0 = pu_stats()
     with ThreadPoolExecutor(max_workers=BATCH_CONCURRENCY) as pool:
         futures = [pool.submit(_process_one, job_id, i) for i in range(n)]
         for f in futures:
             f.result()
     with _jobs_lock:
         _jobs[job_id]["finished"] = True
+    # Podsumowanie do monitoring.log — ile PU i czasu kosztował batch (przy
+    # równoległych batchach liczniki są wspólne dla procesu, więc to górne
+    # oszacowanie).
+    stats1 = pu_stats()
+    log.info("batch %s: %d działek w %.0f s, %.1f PU, %d zapytań do Sentinel Hub, %d odpowiedzi 429",
+             job_id[:8], n, time.time() - t0, stats1["pu"] - stats0["pu"],
+             stats1["requests"] - stats0["requests"],
+             stats1["rate_limited"] - stats0["rate_limited"])
 
 
 @app.post("/api/batch/start")
@@ -615,20 +637,12 @@ def check_multi(req: MultiCheckRequest):
         sowing_d = date_cls.fromisoformat(req.sowing_date) if req.sowing_date else None
         term_d   = date_cls.fromisoformat(req.termination_date) if req.termination_date else None
 
-        # 1. Pobierz dane wielowskaźnikowe S2
-        token = core.cdse_token()
-        multi_records = fetch_multi_series(geom_buf, t_start, t_end, token=token)
-
-        # 2. Opcjonalnie S1
-        s1_records = []
-        s1_error   = None
-        if req.include_s1:
-            try:
-                from sentinel1 import fetch_s1_series
-                s1_records = fetch_s1_series(geom_buf, t_start, t_end)
-            except Exception as e:
-                s1_error = str(e)
-
+        # 1-2c. Pobranie danych: S2 (multi), opcjonalnie S1, pogoda i teren.
+        # Optymalizacja (listopad 2026): dawniej szły po kolei (multi ~2,4 s
+        # + S1 ~2,5 s + Open-Meteo ~1,2 s), choć żadne nie zależy od
+        # pozostałych — teraz równolegle, czas ≈ najwolniejsze z nich.
+        # Semantyka błędów bez zmian: błąd multi przerywa analizę, błędy
+        # S1/pogody/terenu są NIEBLOKUJĄCE (patrz komentarze niżej).
         # 2b. Kontekst pogodowy (Open-Meteo, bezpłatne, bez klucza) —
         # NIEBLOKUJĄCY, dokładnie jak S1 powyżej: brak danych pogodowych nie
         # powinien uniemożliwiać oceny, tylko ją zubażać o jeden pomocniczy
@@ -640,22 +654,57 @@ def check_multi(req: MultiCheckRequest):
         # czysto informacyjne podsumowanie warunków wzrostu dla operatora
         # (patrz niżej, konstrukcja odpowiedzi — NIGDY nie zmienia
         # score/statusu, patrz weather.py).
+        # 2c. Kontekst rzeźby terenu (Open-Meteo Elevation, bezpłatne, bez
+        # klucza) — CZYSTO INFORMACYJNY, nie wchodzi do Confidence Score ani
+        # do fused_status (patrz terrain.py — inny typ dowodu: nie "czy jest
+        # okrywa", tylko "jak ryzykowna erozyjnie jest ta działka
+        # niezależnie od wyniku"). Nieblokujący jak wyżej.
         import weather as weather_mod
-        weather_error = None
-        weather_series: list = []
-        frost_dates: set = set()
-        dry_dates: set = set()
-        first_frost = None
-        try:
-            weather_series = weather_mod.fetch_weather_series(geom_buf, t_start, t_end)
-            frost_dates = weather_mod.detect_frost_dates(weather_series)
-            dry_dates = weather_mod.detect_dry_spell_dates(weather_series)
-            # "after" = 1 września, żeby nie złapać przypadkowego zimnego
-            # poranka wczesnym latem jako "pierwszy przymrozek zimy".
-            first_frost = weather_mod.first_frost_date(
-                weather_series, after=date_cls(req.rok, 9, 1))
-        except Exception as e:
-            weather_error = str(e)
+        import terrain as terrain_mod
+        token = core.cdse_token()
+        with ThreadPoolExecutor(max_workers=4) as fetch_pool:
+            fut_multi = fetch_pool.submit(fetch_multi_series, geom_buf, t_start, t_end, token=token)
+            fut_s1 = None
+            if req.include_s1:
+                from sentinel1 import fetch_s1_series
+                fut_s1 = fetch_pool.submit(fetch_s1_series, geom_buf, t_start, t_end)
+            fut_weather = fetch_pool.submit(weather_mod.fetch_weather_series, geom_buf, t_start, t_end)
+            fut_terrain = fetch_pool.submit(terrain_mod.fetch_terrain_context, geom_buf)
+
+            # 1. Dane wielowskaźnikowe S2 (błąd = błąd całej analizy, jak dawniej)
+            multi_records = fut_multi.result()
+
+            # 2. S1 (nieblokujące)
+            s1_records = []
+            s1_error   = None
+            if fut_s1 is not None:
+                try:
+                    s1_records = fut_s1.result()
+                except Exception as e:
+                    s1_error = str(e)
+
+            # 2b. Pogoda (nieblokujące)
+            weather_error = None
+            weather_series: list = []
+            frost_dates: set = set()
+            dry_dates: set = set()
+            first_frost = None
+            try:
+                weather_series = fut_weather.result()
+                frost_dates = weather_mod.detect_frost_dates(weather_series)
+                dry_dates = weather_mod.detect_dry_spell_dates(weather_series)
+                # "after" = 1 września, żeby nie złapać przypadkowego zimnego
+                # poranka wczesnym latem jako "pierwszy przymrozek zimy".
+                first_frost = weather_mod.first_frost_date(
+                    weather_series, after=date_cls(req.rok, 9, 1))
+            except Exception as e:
+                weather_error = str(e)
+
+            # 2c. Teren (nieblokujące, czysto informacyjne)
+            try:
+                terrain_context = fut_terrain.result()
+            except Exception:
+                terrain_context = None
 
         def _gdd_since_sowing(obs_date):
             """Stopniodnie wzrostu (GDD) od daty siewu do obs_date — None,
@@ -665,18 +714,6 @@ def check_multi(req: MultiCheckRequest):
             if not sowing_d or not weather_series:
                 return None
             return weather_mod.cumulative_gdd(weather_series, sowing_d, obs_date)
-
-        # 2c. Kontekst rzeźby terenu (Open-Meteo Elevation, bezpłatne, bez
-        # klucza) — CZYSTO INFORMACYJNY, nie wchodzi do Confidence Score ani
-        # do fused_status (patrz terrain.py — inny typ dowodu: nie "czy jest
-        # okrywa", tylko "jak ryzykowna erozyjnie jest ta działka
-        # niezależnie od wyniku"). Nieblokujący jak wyżej.
-        terrain_context = None
-        try:
-            import terrain as terrain_mod
-            terrain_context = terrain_mod.fetch_terrain_context(geom_buf)
-        except Exception:
-            terrain_context = None
 
         # 3. Oblicz Confidence Score dla ostatniej obserwacji w oknie oceny
         # Filtrujemy po valid_frac tak samo jak core.assess() — scena prawie

@@ -161,7 +161,10 @@ function setup() {
   };
 }
 function evaluatePixel(s) {
-  return [2.5 * s.B04, 2.5 * s.B03, 2.5 * s.B02, s.dataMask];
+  // Listopadowe sceny mają niską odbijalność — pierwiastek sześcienny
+  // podnosi cienie, żeby zdjęcie nie wychodziło prawie czarne.
+  function vis(v) { return Math.cbrt(Math.max(0, v) * 0.55); }
+  return [vis(s.B04), vis(s.B03), vis(s.B02), s.dataMask];
 }
 """
 
@@ -169,7 +172,14 @@ function evaluatePixel(s) {
 IMAGE_PADDING_RATIO = 0.15   # margines wokół działki, żeby było widać kontekst
 IMAGE_TARGET_RES_M = 10.0    # docelowa rozdzielczość (natywna dla Sentinel-2 10m)
 IMAGE_MAX_DIM = 640
-IMAGE_MIN_DIM = 256
+# Optymalizacja PU (listopad 2026): dawniej IMAGE_MIN_DIM = 512, czyli obraz
+# ~50x40 pikseli natywnych 10 m był po stronie serwera powiększany do 512 px
+# — Sentinel Hub liczy PU od liczby pikseli WYJŚCIA, więc płaciliśmy za
+# piksele bez żadnej nowej informacji (zmierzone: 0,74 PU vs 0,03 PU za ten
+# sam obraz w natywnej rozdzielczości). Teraz pobieramy obraz w 10 m, a
+# powiększa go przeglądarka (Leaflet imageOverlay, CSS pixelated — ten sam
+# wygląd co dawne powiększanie NEAREST po stronie serwera).
+IMAGE_MIN_DIM = 32
 
 
 def _compute_padded_bbox_4326(geom_4326, padding_ratio=IMAGE_PADDING_RATIO):
@@ -200,7 +210,12 @@ def fetch_true_color_image(geom_4326, target_date: date):
     to_3857 = Transformer.from_crs(4326, 3857, always_xy=True).transform
     minx3857, miny3857 = to_3857(bbox_4326[0], bbox_4326[1])
     maxx3857, maxy3857 = to_3857(bbox_4326[2], bbox_4326[3])
-    width_px, height_px = _compute_image_size(maxx3857 - minx3857, maxy3857 - miny3857)
+    # Obraz zostaje w EPSG:3857 (natywna projekcja Leafleta — nakładka trafia
+    # idealnie w mapę), ale rozmiar liczymy w METRACH TERENOWYCH: jednostka
+    # 3857 na tej szerokości to ok. cos(lat) metra w terenie.
+    ground_scale = math.cos(math.radians((bbox_4326[1] + bbox_4326[3]) / 2.0))
+    width_px, height_px = _compute_image_size((maxx3857 - minx3857) * ground_scale,
+                                              (maxy3857 - miny3857) * ground_scale)
 
     payload = {
         "input": {
@@ -240,6 +255,9 @@ def fetch_true_color_image(geom_4326, target_date: date):
     except (requests.RequestException, RuntimeError):
         return None
 
+# Referencja maski NDVI (te same klasy SCL co EVALSCRIPT_MULTI w analytics.py).
+# Od listopada 2026 nie jest już wysyłany do Sentinel Hub — NDVI pochodzi
+# z wyniku zapytania wielowskaźnikowego (patrz fetch_ndvi_series).
 EVALSCRIPT = """
 //VERSION=3
 function setup() {
@@ -287,6 +305,10 @@ class AppError(Exception):
 _geom_cache: dict = {}
 _geom_cache_lock = threading.Lock()
 _GEOM_CACHE_TTL_SECONDS = 600
+# Blokady per działka: w batchu NDVI i analiza wielowskaźnikowa startują
+# równolegle i obie trafiały w pusty cache — szły 2 identyczne zapytania do
+# ULDK. Teraz drugi wątek czeka na wynik pierwszego.
+_geom_fetch_locks: dict = {}
 
 
 def fetch_parcel_geometry(parcel_id: str):
@@ -296,7 +318,18 @@ def fetch_parcel_geometry(parcel_id: str):
         cached = _geom_cache.get(key)
         if cached and now - cached[2] < _GEOM_CACHE_TTL_SECONDS:
             return cached[0], cached[1]
+        fetch_lock = _geom_fetch_locks.setdefault(key, threading.Lock())
 
+    with fetch_lock:
+        with _geom_cache_lock:
+            cached = _geom_cache.get(key)
+            if cached and time.time() - cached[2] < _GEOM_CACHE_TTL_SECONDS:
+                return cached[0], cached[1]
+        return _fetch_parcel_geometry_uldk(parcel_id, key)
+
+
+def _fetch_parcel_geometry_uldk(parcel_id: str, key: str):
+    now = time.time()
     params = {"request": "GetParcelById", "id": key,
               "result": "geom_wkt,teryt,voivodeship,county,commune",
               "srid": "4326"}
@@ -340,22 +373,52 @@ def inner_buffer(geom_4326, meters: float = 10.0):
 # --- CDSE / Sentinel Hub -----------------------------------------------------
 
 _token_cache = {"token": None, "exp": 0.0}
+_token_lock = threading.Lock()
 
 
 def cdse_token() -> str:
     if _token_cache["token"] and time.time() < _token_cache["exp"] - 60:
         return _token_cache["token"]
-    cid = os.environ.get("CDSE_CLIENT_ID")
-    sec = os.environ.get("CDSE_CLIENT_SECRET")
+    # Przy starcie batcha kilka wątków naraz widziało pusty cache i każdy
+    # pobierał własny token — teraz pobiera jeden, reszta bierze z cache.
+    with _token_lock:
+        if _token_cache["token"] and time.time() < _token_cache["exp"] - 60:
+            return _token_cache["token"]
+        return _cdse_token_fetch()
+
+
+def _cdse_token_fetch() -> str:
+    cid = (os.environ.get("CDSE_CLIENT_ID") or "").strip().strip('"').strip("'")
+    sec = (os.environ.get("CDSE_CLIENT_SECRET") or "").strip().strip('"').strip("'")
     if not cid or not sec:
         raise AppError("Serwer nie ma skonfigurowanych CDSE_CLIENT_ID / "
                        "CDSE_CLIENT_SECRET (dane z panelu Copernicus Data "
                        "Space → Sentinel Hub → OAuth clients).")
     try:
-        r = requests.post(CDSE_TOKEN_URL, data={
-            "grant_type": "client_credentials",
-            "client_id": cid, "client_secret": sec}, timeout=30)
+        session = requests.Session()
+        session.trust_env = False
+        r = session.post(
+            CDSE_TOKEN_URL,
+            data={
+                "grant_type": "client_credentials",
+                "client_id": cid,
+                "client_secret": sec,
+            },
+            headers={
+                "Content-Type": "application/x-www-form-urlencoded;charset=utf-8",
+                "Accept": "application/json",
+            },
+            timeout=30,
+        )
+        if r.status_code >= 400:
+            body = (r.text or "").strip()[:400]
+            raise AppError(
+                "Autoryzacja w Copernicus Data Space nie powiodła się: "
+                f"HTTP {r.status_code} (client_id={cid[:12]}…, "
+                f"secret_len={len(sec)}). Odpowiedź: {body or r.reason}")
         r.raise_for_status()
+    except AppError:
+        raise
     except requests.RequestException as e:
         raise AppError(f"Autoryzacja w Copernicus Data Space nie powiodła "
                        f"się: {e}")
@@ -366,55 +429,40 @@ def cdse_token() -> str:
 
 
 def fetch_ndvi_series(geom_4326, t_start: date, t_end: date):
-    to_3857 = Transformer.from_crs(4326, 3857, always_xy=True).transform
-    geom_3857 = shp_transform(to_3857, geom_4326)
-    payload = {
-        "input": {
-            "bounds": {
-                "geometry": mapping(geom_3857),
-                "properties": {"crs":
-                               "http://www.opengis.net/def/crs/EPSG/0/3857"},
-            },
-            "data": [{"type": "sentinel-2-l2a",
-                      "dataFilter": {"maxCloudCoverage": 90}}],
-        },
-        "aggregation": {
-            "timeRange": {"from": f"{t_start.isoformat()}T00:00:00Z",
-                          "to":   f"{t_end.isoformat()}T23:59:59Z"},
-            "aggregationInterval": {"of": "P1D"},
-            "resx": 10, "resy": 10,
-            "evalscript": EVALSCRIPT,
-        },
-    }
-    headers = {"Authorization": f"Bearer {cdse_token()}"}
+    """Szereg NDVI działki (date, ndvi_mean, valid_frac).
+
+    Optymalizacja (listopad 2026): NDVI nie jest już pobierany osobnym
+    zapytaniem do Sentinel Hub. Liczymy go z wyniku analytics.
+    fetch_multi_series_strict — ta sama maska SCL (klasy 0,1,3,8,9,10,11),
+    ten sam limit zachmurzenia (90%), ta sama geometria, a NDVI jest jednym
+    z jego wyjść (zweryfikowane na żywo: identyczne sceny i valid_frac,
+    różnice NDVI tylko z zaokrąglenia, <= 0,001). Dzięki wspólnej pamięci
+    podręcznej (sh_utils.cached_call) w batchu, przy pojedynczej działce
+    i w schedulerze NDVI i analiza wielowskaźnikowa dzielą JEDNO zapytanie.
+
+    Daty z przyszłości nie mają scen, więc koniec zakresu przycinamy do
+    dziś — dzięki temu klucz pamięci podręcznej jest ten sam co w
+    /api/check_multi (które zawsze przycinało do dziś).
+    Celowo bez łagodniejszego fallbacku bez maski SCL (jak dawniej).
+    """
+    import analytics
+    t_end = min(t_end, date.today())
+    if t_end < t_start:
+        return []
     try:
-        r = _post_with_retry(CDSE_STATS_URL, payload, headers, timeout=180,
-                              refresh_token_fn=cdse_token)
+        multi = analytics.fetch_multi_series_strict(geom_4326, t_start, t_end)
+    except AppError:
+        raise
     except (requests.RequestException, RuntimeError) as e:
-        raise AppError(f"Brak połączenia z Sentinel Hub: {e}")
-    if r.status_code != 200:
-        raise AppError(f"Sentinel Hub Statistical API zwrócił błąd "
-                       f"{r.status_code}: {r.text[:300]}")
+        raise AppError(f"Sentinel Hub: {e}")
     records = []
-    for item in r.json().get("data", []):
-        try:
-            stats = item["outputs"]["ndvi"]["bands"]["B0"]["stats"]
-        except KeyError:
+    for r in multi:
+        ndvi = safe_float(r.get("ndvi"))
+        vf = safe_float(r.get("valid_frac"))
+        if ndvi is None or vf is None:
             continue
-        n_all = stats.get("sampleCount", 0)
-        n_bad = stats.get("noDataCount", 0)
-        if not n_all:
-            continue
-        mean = safe_float(stats.get("mean"))
-        if mean is None:
-            continue
-        valid_frac = safe_float(1.0 - n_bad / n_all)
-        if valid_frac is None:
-            continue
-        d = datetime.fromisoformat(
-            item["interval"]["from"].replace("Z", "+00:00")).date()
-        records.append({"date": d, "ndvi_mean": round(mean, 3),
-                        "valid_frac": round(valid_frac, 3)})
+        records.append({"date": r["date"], "ndvi_mean": round(ndvi, 3),
+                        "valid_frac": round(vf, 3)})
     return sorted(records, key=lambda x: x["date"])
 
 

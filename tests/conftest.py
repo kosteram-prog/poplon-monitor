@@ -15,6 +15,25 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
+def reset_sentinel_hub_state():
+    """Pamięć podręczna szeregów (sh_utils.cached_call), cache geometrii ULDK
+    i stan limitera Sentinel Hub (globalna pauza po 429, budżet PU) to
+    globalny stan procesu — bez resetu wynik/pauza z jednego testu
+    przeciekałyby do kolejnych (np. ten sam poligon i daty w dwóch testach
+    parsowania, albo pauza po 429 usypiająca następny test)."""
+    import core
+    import sentinel1
+    import sh_utils
+    sh_utils.clear_caches()
+    sentinel1._reset_rate_limiter()
+    with core._geom_cache_lock:
+        core._geom_cache.clear()
+    yield
+    sh_utils.clear_caches()
+    sentinel1._reset_rate_limiter()
+
+
+@pytest.fixture(autouse=True)
 def isolated_db(tmp_path, monkeypatch):
     """Każdy test dostaje własną, pustą bazę SQLite — testy nigdy nie
     dotykają prawdziwego monitoring.db."""
@@ -32,6 +51,18 @@ def reset_calibrated_thresholds():
     orig_high, orig_mid = core.NDVI_COVER_HIGH, core.NDVI_COVER_MID
     yield
     core.NDVI_COVER_HIGH, core.NDVI_COVER_MID = orig_high, orig_mid
+
+
+@pytest.fixture(autouse=True)
+def reset_water_threshold():
+    """water_stress.Z_SCORE_RISK_THRESHOLD to globalny, mutowalny stan procesu
+    (apply_water_threshold podmienia go w pamieci, patrz reload_water_threshold)
+    -- bez resetu kalibracja wykonana w jednym tescie przecieklaby do kolejnych,
+    analogicznie do reset_calibrated_thresholds powyzej."""
+    import water_stress
+    orig = water_stress.Z_SCORE_RISK_THRESHOLD
+    yield
+    water_stress.Z_SCORE_RISK_THRESHOLD = orig
 
 
 @pytest.fixture(autouse=True)
@@ -85,3 +116,17 @@ def fake_ndvi_verdict():
             "parcel_info": {},
         }
     return _make
+
+
+@pytest.fixture(autouse=True)
+def no_real_network(monkeypatch):
+    """Testy nigdy nie łączą się z internetem. Każde zapytanie HTTP, którego
+    test sam nie zamockował (requests.get/post, _post_with_retry itp.), kończy
+    się ConnectionError — kod produkcyjny traktuje to jak chwilową awarię
+    źródła (ścieżki nieblokujące). Mocki na poziomie requests.get / funkcji
+    modułu ustawiane w teście mają pierwszeństwo."""
+    import requests
+
+    def _blocked(self, method, url, *a, **k):
+        raise requests.ConnectionError(f"sieć wyłączona w testach: {method} {url}")
+    monkeypatch.setattr(requests.sessions.Session, "request", _blocked)

@@ -25,8 +25,15 @@ from sentinel1 import _post_with_retry
 
 # ============================================================
 # EVALSCRIPT — Sentinel-2 L2A, 7 wskaźników jednym zapytaniem
-# Pasma: B02(Blue), B04(Red), B05/B06/B07(RedEdge x3 -> REIP), B08(NIR),
-#        B11/B12(SWIR x2 -> NDTI), SCL
+# Pasma: B04(Red), B05/B06/B07(RedEdge x3 -> REIP), B08(NIR), B8A(NIR wąskie -> NDMI),
+#        B11/B12(SWIR x2 -> NDMI, NDTI), SCL
+#
+# Zmiana listopad 2026: EVI -> EVI2 (bez B02) i NDMI liczony z B8A zamiast B08.
+# Liczba pasm wejściowych bez zmian (B02 wypadł, B8A doszedł) -> koszt PU bez
+# zmian. Klucze wyjść ("evi", "ndwi") zostały, żeby nie migrować bazy/API —
+# w UI są opisane jako EVI2 i NDMI. EVI2 wychodzi typowo o 3-6% niżej niż
+# EVI dla tej samej okrywy; progi THRESHOLDS["evi"] i współczynnik EVI w
+# modelu biomasy warto przeliczyć po zebraniu nowego sezonu.
 # ============================================================
 
 EVALSCRIPT_MULTI = """
@@ -62,20 +69,28 @@ EVALSCRIPT_MULTI = """
 // NIE wchodzi do Confidence Score — trafi (krok 3 planu) jako dodatkowy
 // dowód optyczny do detect_agro_events_fused (wykrywanie orki), analogicznie
 // do dzisiejszej roli RVI z Sentinel-1.
+//
+// SKALOWANIE (optymalizacja PU, listopad 2026): wyjścia są INT16, nie FLOAT32.
+// Sentinel Hub liczy wyjście 32-bitowe x2 PU — zmierzone: 2,53 -> 1,26 PU na
+// to samo zapytanie, różnica NDVI <= 0,00005. Wskaźniki są zwracane x10000
+// (zakres INT16 +-32767 mieści EVI do 2,5), REIP jako (reip - 680) x 400
+// (680-750 nm -> 0-28000). Dekodowanie w analytics.fetch_multi_series
+// (MULTI_INDEX_SCALE / REIP_OFFSET_NM / REIP_SCALE). Piksele odrzucone
+// dostają 0 i dataMask 0 — statystyki liczone są tylko z dataMask = 1.
 
 function setup() {
   return {
     input: [{
-      bands: ["B02", "B04", "B05", "B06", "B07", "B08", "B11", "B12", "SCL", "dataMask"]
+      bands: ["B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12", "SCL", "dataMask"]
     }],
     output: [
-      { id: "ndvi",     bands: 1, sampleType: "FLOAT32" },
-      { id: "evi",      bands: 1, sampleType: "FLOAT32" },
-      { id: "savi",     bands: 1, sampleType: "FLOAT32" },
-      { id: "ndre",     bands: 1, sampleType: "FLOAT32" },
-      { id: "ndwi",     bands: 1, sampleType: "FLOAT32" },
-      { id: "reip",     bands: 1, sampleType: "FLOAT32" },
-      { id: "ndti",     bands: 1, sampleType: "FLOAT32" },
+      { id: "ndvi",     bands: 1, sampleType: "INT16" },
+      { id: "evi",      bands: 1, sampleType: "INT16" },
+      { id: "savi",     bands: 1, sampleType: "INT16" },
+      { id: "ndre",     bands: 1, sampleType: "INT16" },
+      { id: "ndwi",     bands: 1, sampleType: "INT16" },
+      { id: "reip",     bands: 1, sampleType: "INT16" },
+      { id: "ndti",     bands: 1, sampleType: "INT16" },
       { id: "dataMask", bands: 1, sampleType: "UINT8"   }
     ]
   };
@@ -89,15 +104,15 @@ function evaluatePixel(s) {
 
   if (!valid) {
     return {
-      ndvi: [NaN], evi: [NaN], savi: [NaN],
-      ndre: [NaN], ndwi: [NaN], reip: [NaN], ndti: [NaN], dataMask: [0]
+      ndvi: [0], evi: [0], savi: [0],
+      ndre: [0], ndwi: [0], reip: [0], ndti: [0], dataMask: [0]
     };
   }
 
   // Pasma już w reflektancji [0-1] — bez skalowania (patrz komentarz u góry)
   const NIR   = s.B08;
   const RED   = s.B04;
-  const BLUE  = s.B02;
+  const NIR_N = s.B8A;   // wąskie NIR 865nm, natywnie 20m jak B11 — do NDMI
   const RE1   = s.B05;   // Red Edge 1 — 705nm
   const RE2   = s.B06;   // Red Edge 2 — 740nm
   const RE3   = s.B07;   // Red Edge 3 — 783nm
@@ -107,9 +122,11 @@ function evaluatePixel(s) {
   // NDVI — baseline
   const ndvi = (NIR - RED) / (NIR + RED + 1e-9);
 
-  // EVI — Enhanced Vegetation Index (Huete et al. 2002)
-  // Mniej saturuje niż NDVI przy gęstej biomasie, koryguje atmosferę
-  const evi = 2.5 * (NIR - RED) / (NIR + 6.0*RED - 7.5*BLUE + 1.0 + 1e-9);
+  // EVI2 — dwupasmowy EVI (Jiang et al. 2008), wyjście nadal pod kluczem "evi".
+  // Mniej saturuje niż NDVI przy gęstej biomasie; w odróżnieniu od EVI nie
+  // używa niebieskiego B02, który w L2A najmocniej zależy od korekcji
+  // aerozolu i destabilizował mianownik (stąd dawne przycinanie do 2.5).
+  const evi = 2.5 * (NIR - RED) / (NIR + 2.4*RED + 1.0 + 1e-9);
 
   // SAVI — Soil Adjusted Vegetation Index (L=0.428 optymalne dla upraw polowych)
   // Lepszy niż NDVI we wczesnych fazach wzrostu i przy rzadkiej okrywie
@@ -120,9 +137,11 @@ function evaluatePixel(s) {
   // Wrażliwy na zawartość chlorofilu — sygnał wigoru roślin przed widocznym stresem
   const ndre = (NIR - RE1) / (NIR + RE1 + 1e-9);
 
-  // NDWI — Normalized Difference Water Index (Gao 1996)
-  // NIR vs SWIR: wysoki = wilgotna biomasa, niski = stres wodny lub schnięcie
-  const ndwi = (NIR - SWIR1) / (NIR + SWIR1 + 1e-9);
+  // NDMI (= NDWI wg Gao 1996), wyjście nadal pod kluczem "ndwi".
+  // B8A (wąskie NIR, 20m) zamiast B08 — ta sama rozdzielczość co B11,
+  // standardowa para pasm NDMI dla Sentinel-2.
+  // Wysoki = wilgotna biomasa, niski = stres wodny lub schnięcie.
+  const ndwi = (NIR_N - SWIR1) / (NIR_N + SWIR1 + 1e-9);
 
   // REIP — Red Edge Inflection Point (Guyot & Baret 1988), w nanometrach.
   // reip = 700 + 40 * ((RED+RE3)/2 - RE1) / (RE2 - RE1)
@@ -133,13 +152,14 @@ function evaluatePixel(s) {
   const ndti = (SWIR1 - SWIR2) / (SWIR1 + SWIR2 + 1e-9);
 
   return {
-    ndvi:     [Math.max(-1, Math.min(1, ndvi))],
-    evi:      [Math.max(-1, Math.min(2.5, evi))],
-    savi:     [Math.max(-1, Math.min(1.5, savi))],
-    ndre:     [Math.max(-1, Math.min(1, ndre))],
-    ndwi:     [Math.max(-1, Math.min(1, ndwi))],
-    reip:     [Math.max(680, Math.min(750, reip))],
-    ndti:     [Math.max(-1, Math.min(1, ndti))],
+    // INT16: wskaźniki x10000, REIP jako (reip - 680) x 400 (patrz SKALOWANIE)
+    ndvi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndvi)))],
+    evi:      [Math.round(10000 * Math.max(-1, Math.min(2.5, evi)))],
+    savi:     [Math.round(10000 * Math.max(-1, Math.min(1.5, savi)))],
+    ndre:     [Math.round(10000 * Math.max(-1, Math.min(1, ndre)))],
+    ndwi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndwi)))],
+    reip:     [Math.round(400 * (Math.max(680, Math.min(750, reip)) - 680))],
+    ndti:     [Math.round(10000 * Math.max(-1, Math.min(1, ndti)))],
     dataMask: [1]
   };
 }
@@ -152,16 +172,16 @@ EVALSCRIPT_MULTI_RELAXED = """
 function setup() {
   return {
     input: [{
-      bands: ["B02", "B04", "B05", "B06", "B07", "B08", "B11", "B12", "dataMask"]
+      bands: ["B04", "B05", "B06", "B07", "B08", "B8A", "B11", "B12", "dataMask"]
     }],
     output: [
-      { id: "ndvi",     bands: 1, sampleType: "FLOAT32" },
-      { id: "evi",      bands: 1, sampleType: "FLOAT32" },
-      { id: "savi",     bands: 1, sampleType: "FLOAT32" },
-      { id: "ndre",     bands: 1, sampleType: "FLOAT32" },
-      { id: "ndwi",     bands: 1, sampleType: "FLOAT32" },
-      { id: "reip",     bands: 1, sampleType: "FLOAT32" },
-      { id: "ndti",     bands: 1, sampleType: "FLOAT32" },
+      { id: "ndvi",     bands: 1, sampleType: "INT16" },
+      { id: "evi",      bands: 1, sampleType: "INT16" },
+      { id: "savi",     bands: 1, sampleType: "INT16" },
+      { id: "ndre",     bands: 1, sampleType: "INT16" },
+      { id: "ndwi",     bands: 1, sampleType: "INT16" },
+      { id: "reip",     bands: 1, sampleType: "INT16" },
+      { id: "ndti",     bands: 1, sampleType: "INT16" },
       { id: "dataMask", bands: 1, sampleType: "UINT8"   }
     ]
   };
@@ -171,15 +191,15 @@ function evaluatePixel(s) {
   const valid = s.dataMask === 1 ? 1 : 0;
   if (!valid) {
     return {
-      ndvi: [NaN], evi: [NaN], savi: [NaN],
-      ndre: [NaN], ndwi: [NaN], reip: [NaN], ndti: [NaN], dataMask: [0]
+      ndvi: [0], evi: [0], savi: [0],
+      ndre: [0], ndwi: [0], reip: [0], ndti: [0], dataMask: [0]
     };
   }
 
   // Pasma już w reflektancji [0-1] — bez skalowania (patrz EVALSCRIPT_MULTI)
   const NIR   = s.B08;
   const RED   = s.B04;
-  const BLUE  = s.B02;
+  const NIR_N = s.B8A;   // wąskie NIR 865nm, natywnie 20m jak B11 — do NDMI
   const RE1   = s.B05;
   const RE2   = s.B06;
   const RE3   = s.B07;
@@ -187,22 +207,23 @@ function evaluatePixel(s) {
   const SWIR2 = s.B12;
 
   const ndvi = (NIR - RED) / (NIR + RED + 1e-9);
-  const evi = 2.5 * (NIR - RED) / (NIR + 6.0*RED - 7.5*BLUE + 1.0 + 1e-9);
+  const evi = 2.5 * (NIR - RED) / (NIR + 2.4*RED + 1.0 + 1e-9);   // EVI2
   const L = 0.428;
   const savi = ((NIR - RED) / (NIR + RED + L + 1e-9)) * (1.0 + L);
   const ndre = (NIR - RE1) / (NIR + RE1 + 1e-9);
-  const ndwi = (NIR - SWIR1) / (NIR + SWIR1 + 1e-9);
+  const ndwi = (NIR_N - SWIR1) / (NIR_N + SWIR1 + 1e-9);   // NDMI z B8A
   const reip = 700.0 + 40.0 * (((RED + RE3) / 2.0) - RE1) / (RE2 - RE1 + 1e-9);
   const ndti = (SWIR1 - SWIR2) / (SWIR1 + SWIR2 + 1e-9);
 
   return {
-    ndvi:     [Math.max(-1, Math.min(1, ndvi))],
-    evi:      [Math.max(-1, Math.min(2.5, evi))],
-    savi:     [Math.max(-1, Math.min(1.5, savi))],
-    ndre:     [Math.max(-1, Math.min(1, ndre))],
-    ndwi:     [Math.max(-1, Math.min(1, ndwi))],
-    reip:     [Math.max(680, Math.min(750, reip))],
-    ndti:     [Math.max(-1, Math.min(1, ndti))],
+    // INT16: wskaźniki x10000, REIP jako (reip - 680) x 400 (patrz SKALOWANIE)
+    ndvi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndvi)))],
+    evi:      [Math.round(10000 * Math.max(-1, Math.min(2.5, evi)))],
+    savi:     [Math.round(10000 * Math.max(-1, Math.min(1.5, savi)))],
+    ndre:     [Math.round(10000 * Math.max(-1, Math.min(1, ndre)))],
+    ndwi:     [Math.round(10000 * Math.max(-1, Math.min(1, ndwi)))],
+    reip:     [Math.round(400 * (Math.max(680, Math.min(750, reip)) - 680))],
+    ndti:     [Math.round(10000 * Math.max(-1, Math.min(1, ndti)))],
     dataMask: [1]
   };
 }
@@ -618,89 +639,171 @@ def fetch_multi_series(
                                        # gołą, analogicznie do dzisiejszej roli RVI)
         "valid_frac": float,      # frakcja wiarygodnych pikseli
     }
-    """
-    from shapely.geometry import mapping as shp_mapping
-    from shapely.ops import transform as shp_transform
-    from pyproj import Transformer
 
-    to_3857 = Transformer.from_crs(4326, 3857, always_xy=True).transform
-    geom_3857 = shp_transform(to_3857, geom_4326)
+    Optymalizacja (listopad 2026): geometria w UTM, wyjścia INT16, valid_frac
+    względem pikseli działki, pełny dzień t_end, pamięć podręczna z
+    single-flight (patrz sh_utils.py). Wynik ścisłego zapytania (z maską SCL)
+    jest wspólny z core.fetch_ndvi_series — NDVI działki nie jest już
+    pobierany osobnym zapytaniem.
+    """
+    records = fetch_multi_series_strict(geom_4326, t_start, t_end, token=token)
+    if records:
+        return records
+    return _fetch_multi_cached(geom_4326, t_start, t_end, token,
+                               EVALSCRIPT_MULTI_RELAXED, 95)
+
+
+# Rozkład NDMI (wyjście "ndwi") w obrębie działki — percentyle i histogram
+# z Statistical API (wartości w skali INT16 x10000, patrz SKALOWANIE).
+NDWI_PERCENTILES = [10, 50]
+NDWI_HIST_LOW, NDWI_HIST_HIGH, NDWI_HIST_BINS = -5000, 10000, 60   # koszyki co 0.025
+# "Suchy piksel" = NDMI niższy od mediany pola o co najmniej tyle (roboczo).
+NDWI_LOW_MARGIN = 0.10
+
+
+def _ndwi_distribution(outputs: dict) -> dict:
+    """{ndwi_p10, ndwi_p50, ndwi_low_frac} z percentyli i histogramu
+    wyjścia "ndwi". ndwi_low_frac = udział pikseli pola z NDMI niższym od
+    mediany pola o >= NDWI_LOW_MARGIN (plamy przesuszenia / niedolana część).
+    Brak danych w odpowiedzi -> None (starsze odpowiedzi, testy, błąd API)."""
+    res = {"ndwi_p10": None, "ndwi_p50": None, "ndwi_low_frac": None}
+    try:
+        b0 = outputs["ndwi"]["bands"]["B0"]
+    except (KeyError, TypeError):
+        return res
+    pct = (b0.get("stats") or {}).get("percentiles") or {}
+
+    def _pct(k):
+        for key in (f"{k}.0", str(k), float(k)):
+            if key in pct and pct[key] is not None:
+                try:
+                    v = float(pct[key])
+                except (TypeError, ValueError):
+                    return None
+                return round(v / MULTI_INDEX_SCALE, 4) if math.isfinite(v) else None
+        return None
+
+    res["ndwi_p10"] = _pct(10)
+    res["ndwi_p50"] = _pct(50)
+    bins = ((b0.get("histogram") or {}).get("bins")) or []
+    if res["ndwi_p50"] is not None and bins:
+        limit = round((res["ndwi_p50"] - NDWI_LOW_MARGIN) * MULTI_INDEX_SCALE, 3)
+        total = sum(int(b.get("count") or 0) for b in bins)
+        # Koszyk liczymy do "suchych", gdy cały leży poniżej granicy.
+        low = sum(int(b.get("count") or 0) for b in bins
+                  if b.get("highEdge") is not None and float(b["highEdge"]) <= limit + 1e-6)
+        if total > 0:
+            res["ndwi_low_frac"] = round(low / total, 4)
+    return res
+
+
+# Dekodowanie wyjść INT16 z EVALSCRIPT_MULTI/RELAXED (patrz SKALOWANIE w evalscripcie).
+MULTI_INDEX_SCALE = 10000.0
+REIP_OFFSET_NM = 680.0
+REIP_SCALE = 400.0
+
+
+def fetch_multi_series_strict(
+    geom_4326, t_start: date, t_end: date, token: Optional[str] = None
+) -> list[dict]:
+    """Jak fetch_multi_series, ale wyłącznie zapytanie z maską SCL (bez
+    łagodniejszego fallbacku). Z tego samego wyniku korzysta
+    core.fetch_ndvi_series — dzięki pamięci podręcznej w batchu i przy
+    pojedynczej działce NDVI i analiza wielowskaźnikowa dzielą jedno
+    zapytanie do Sentinel Hub zamiast dwóch."""
+    return _fetch_multi_cached(geom_4326, t_start, t_end, token, EVALSCRIPT_MULTI, 90)
+
+
+def _fetch_multi_cached(geom_4326, t_start, t_end, token, evalscript, max_cloud):
+    from sh_utils import cached_call, geom_key, text_key
+    key = ("s2multi", geom_key(geom_4326), t_start, t_end, text_key(evalscript), max_cloud)
+    return cached_call(key, lambda: _fetch_multi_raw(
+        geom_4326, t_start, t_end, token, evalscript, max_cloud))
+
+
+def _fetch_multi_raw(geom_4326, t_start, t_end, token, evalscript, max_cloud) -> list[dict]:
+    from sh_utils import stat_bounds, stats_time_range, valid_fraction
+
+    bounds, n_poly_px = stat_bounds(geom_4326)
 
     auth_token = token or _get_token()
     headers = {"Authorization": f"Bearer {auth_token}", "Content-Type": "application/json"}
 
-    def _fetch_with(evalscript: str, max_cloud: int) -> list[dict]:
-        payload = {
-            "input": {
-                "bounds": {
-                    "geometry": shp_mapping(geom_3857),
-                    "properties": {"crs": "http://www.opengis.net/def/crs/EPSG/0/3857"},
-                },
-                "data": [{
-                    "type": "sentinel-2-l2a",
-                    "dataFilter": {"maxCloudCoverage": max_cloud},
-                }],
+    payload = {
+        "input": {
+            "bounds": bounds,
+            "data": [{
+                "type": "sentinel-2-l2a",
+                "dataFilter": {"maxCloudCoverage": max_cloud},
+            }],
+        },
+        "aggregation": {
+            "timeRange": stats_time_range(t_start, t_end),
+            "aggregationInterval": {"of": "P1D"},
+            "resx": 10, "resy": 10,
+            "evalscript": evalscript,
+        },
+        # Rozkład NDMI w obrębie działki (moduł wodny: równomierność
+        # nawodnienia / plamy przesuszenia). Liczone przez serwer z tego
+        # samego zapytania — bez dodatkowego żądania.
+        "calculations": {
+            "ndwi": {
+                "statistics": {"default": {"percentiles": {"k": NDWI_PERCENTILES}}},
+                "histograms": {"default": {"nBins": NDWI_HIST_BINS,
+                                           "lowEdge": NDWI_HIST_LOW,
+                                           "highEdge": NDWI_HIST_HIGH}},
             },
-            "aggregation": {
-                "timeRange": {
-                    "from": f"{t_start.isoformat()}T00:00:00Z",
-                    "to":   f"{t_end.isoformat()}T23:59:59Z",
-                },
-                "aggregationInterval": {"of": "P1D"},
-                "resx": 10, "resy": 10,
-                "evalscript": evalscript,
-            },
-        }
+        },
+    }
 
-        resp = _post_with_retry(CDSE_STATS_URL, payload, headers, timeout=240,
-                                 refresh_token_fn=_get_token)
+    resp = _post_with_retry(CDSE_STATS_URL, payload, headers, timeout=240,
+                             refresh_token_fn=_get_token)
 
-        if resp.status_code != 200:
-            raise RuntimeError(
-                f"Sentinel Hub Statistical API błąd {resp.status_code}: {resp.text[:400]}"
-            )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Sentinel Hub Statistical API błąd {resp.status_code}: {resp.text[:400]}"
+        )
 
-        out = []
-        for item in resp.json().get("data", []):
-            outputs = item.get("outputs", {})
-            dm = outputs.get("ndvi", {}).get("bands", {}).get("B0", {}).get("stats", {})
-            if not dm:
-                dm = outputs.get("dataMask", {}).get("bands", {}).get("B0", {}).get("stats", {})
-            n_all = dm.get("sampleCount", 0)
-            n_bad = dm.get("noDataCount", 0)
-            if not n_all:
-                continue
-            valid_frac = round(1.0 - n_bad / n_all, 3)
+    out = []
+    for item in resp.json().get("data", []):
+        outputs = item.get("outputs", {})
+        dm = outputs.get("ndvi", {}).get("bands", {}).get("B0", {}).get("stats", {})
+        if not dm:
+            dm = outputs.get("dataMask", {}).get("bands", {}).get("B0", {}).get("stats", {})
+        valid_frac = valid_fraction(dm, n_poly_px)
+        if valid_frac is None:
+            continue
 
-            def _mean(key):
-                try:
-                    v = outputs[key]["bands"]["B0"]["stats"]["mean"]
-                    return round(float(v), 4) if v is not None and math.isfinite(float(v)) else None
-                except (KeyError, TypeError, ValueError):
-                    return None
+        def _mean(key):
+            try:
+                v = float(outputs[key]["bands"]["B0"]["stats"]["mean"])
+            except (KeyError, TypeError, ValueError):
+                return None
+            if not math.isfinite(v):
+                return None
+            if key == "reip":
+                return round(v / REIP_SCALE + REIP_OFFSET_NM, 4)
+            return round(v / MULTI_INDEX_SCALE, 4)
 
-            ndvi = _mean("ndvi")
-            if ndvi is None:
-                continue
+        ndvi = _mean("ndvi")
+        if ndvi is None:
+            continue
 
-            d = datetime.fromisoformat(item["interval"]["from"].replace("Z", "+00:00")).date()
-            out.append({
-                "date": d,
-                "ndvi": ndvi,
-                "evi": _mean("evi"),
-                "savi": _mean("savi"),
-                "ndre": _mean("ndre"),
-                "ndwi": _mean("ndwi"),
-                "reip": _mean("reip"),
-                "ndti": _mean("ndti"),
-                "valid_frac": valid_frac,
-            })
-        return sorted(out, key=lambda x: x["date"])
-
-    records = _fetch_with(EVALSCRIPT_MULTI, 90)
-    if records:
-        return records
-    return _fetch_with(EVALSCRIPT_MULTI_RELAXED, 95)
+        d = datetime.fromisoformat(item["interval"]["from"].replace("Z", "+00:00")).date()
+        ndwi_dist = _ndwi_distribution(outputs)
+        out.append({
+            "date": d,
+            **ndwi_dist,
+            "ndvi": ndvi,
+            "evi": _mean("evi"),
+            "savi": _mean("savi"),
+            "ndre": _mean("ndre"),
+            "ndwi": _mean("ndwi"),
+            "reip": _mean("reip"),
+            "ndti": _mean("ndti"),
+            "valid_frac": valid_frac,
+        })
+    return sorted(out, key=lambda x: x["date"])
 
 
 # ============================================================

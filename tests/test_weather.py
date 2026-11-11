@@ -24,6 +24,7 @@ def test_fetch_weather_series_parsuje_odpowiedz_open_meteo():
             "temperature_2m_mean": [10.0, 1.0, 5.5],
             "precipitation_sum": [0.0, 2.5, 0.0],
             "shortwave_radiation_sum": [12.0, 8.0, 10.0],
+            "et0_fao_evapotranspiration": [2.1, 0.8, 1.5],
         }
     }
     with patch("weather.requests.get") as mock_get:
@@ -32,16 +33,18 @@ def test_fetch_weather_series_parsuje_odpowiedz_open_meteo():
 
     assert series == [
         {"date": date(2026, 9, 1), "tmin_c": 5.0, "tmax_c": 15.0, "tmean_c": 10.0,
-         "precip_mm": 0.0, "radiation_mj": 12.0},
+         "precip_mm": 0.0, "radiation_mj": 12.0, "et0_mm": 2.1},
         {"date": date(2026, 9, 2), "tmin_c": -3.0, "tmax_c": 5.0, "tmean_c": 1.0,
-         "precip_mm": 2.5, "radiation_mj": 8.0},
+         "precip_mm": 2.5, "radiation_mj": 8.0, "et0_mm": 0.8},
         {"date": date(2026, 9, 3), "tmin_c": 1.0, "tmax_c": 10.0, "tmean_c": 5.5,
-         "precip_mm": 0.0, "radiation_mj": 10.0},
+         "precip_mm": 0.0, "radiation_mj": 10.0, "et0_mm": 1.5},
     ]
     # centroid, nie pełna geometria — sprawdzamy że API dostało lat/lon centroidu
     _, kwargs = mock_get.call_args
     assert kwargs["params"]["latitude"] == 52.0
     assert kwargs["params"]["longitude"] == 19.0
+    assert "et0_fao_evapotranspiration" in kwargs["params"]["daily"]
+    assert kwargs["params"]["timezone"] == "auto"
 
 
 def test_fetch_weather_series_rzuca_przy_bledzie_api():
@@ -142,3 +145,29 @@ def test_growing_conditions_summary_agreguje_pola():
     assert summary["gdd_base_temp_c"] == weather.GDD_BASE_TEMP_C
     assert summary["total_precip_mm"] == 2.5
     assert summary["total_radiation_mj"] == 30.0
+
+
+# --- ET0 i klimatyczny bilans wodny ---------------------------------------
+
+def test_climatic_water_balance_sumuje_p_minus_et0():
+    from datetime import date, timedelta
+    end = date(2026, 7, 14)
+    series = [{"date": end - timedelta(days=i), "precip_mm": 1.0, "et0_mm": 4.0}
+              for i in range(20)]
+    assert weather.climatic_water_balance(series, end, 14) == -42.0
+
+
+def test_climatic_water_balance_none_gdy_za_duzo_brakow():
+    from datetime import date, timedelta
+    end = date(2026, 7, 14)
+    series = [{"date": end - timedelta(days=i), "precip_mm": 0.0, "et0_mm": 3.0}
+              for i in range(5)]
+    assert weather.climatic_water_balance(series, end, 14) is None
+
+
+def test_climatic_water_balance_uzupelnia_pojedyncze_braki_srednia():
+    from datetime import date, timedelta
+    end = date(2026, 7, 14)
+    series = [{"date": end - timedelta(days=i), "precip_mm": 0.0,
+               "et0_mm": None if i == 0 else 2.0} for i in range(14)]
+    assert weather.climatic_water_balance(series, end, 14) == -28.0

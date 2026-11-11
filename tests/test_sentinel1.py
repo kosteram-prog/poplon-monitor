@@ -87,3 +87,36 @@ def test_conf_up_nie_wywala_keyerror_na_nieznanej_wartosci():
     assert sentinel1._CONF_UP.get("nieznana", "nieznana") == "nieznana"
     assert sentinel1._CONF_UP.get("low", "low") == "medium"
     assert sentinel1._CONF_UP.get("high", "high") == "high"
+
+
+
+def test_fetch_s1_relative_orbits_parsuje_stac_i_filtruje_kierunek(monkeypatch):
+    from datetime import date
+    from unittest.mock import MagicMock
+    from shapely.geometry import box
+    import sentinel1
+    page = {"features": [
+        {"properties": {"datetime": "2026-11-10T05:08:27Z", "sat:orbit_state": "descending",
+                        "sat:relative_orbit": 22, "sar:instrument_mode": "IW"}},
+        {"properties": {"datetime": "2026-11-08T16:34:45Z", "sat:orbit_state": "ascending",
+                        "sat:relative_orbit": 175, "sar:instrument_mode": "IW"}},
+        {"properties": {"datetime": "2026-11-05T05:00:30Z", "sat:orbit_state": "descending",
+                        "sat:relative_orbit": 124, "sar:instrument_mode": "IW"}},
+    ], "links": []}
+    monkeypatch.setattr(sentinel1.requests, "get",
+                        lambda url, params=None, timeout=None: MagicMock(status_code=200, json=lambda: page))
+    out = sentinel1.fetch_s1_relative_orbits(box(17.0, 51.1, 17.01, 51.11),
+                                             date(2026, 11, 1), date(2026, 11, 11))
+    assert out == {date(2026, 11, 10): 22, date(2026, 11, 5): 124}
+
+
+def test_fetch_s1_relative_orbits_nieblokujace_przy_bledzie(monkeypatch):
+    from datetime import date
+    from shapely.geometry import box
+    import sentinel1
+
+    def boom(*a, **k):
+        raise sentinel1.requests.ConnectionError("brak sieci")
+    monkeypatch.setattr(sentinel1.requests, "get", boom)
+    assert sentinel1.fetch_s1_relative_orbits(box(17.0, 51.1, 17.01, 51.11),
+                                              date(2026, 11, 1), date(2026, 11, 11)) == {}

@@ -1081,16 +1081,18 @@ def test_fetch_multi_series_zwraca_reip_z_odpowiedzi_statistical_api():
 
     geom = Polygon([(19.0, 50.0), (19.001, 50.0), (19.001, 50.001), (19.0, 50.001)])
 
+    # Wartości w kodowaniu INT16 z EVALSCRIPT_MULTI (wskaźniki x10000,
+    # REIP jako (reip-680) x 400) — patrz SKALOWANIE w analytics.py.
     fake_response_json = {
         "data": [{
             "interval": {"from": "2026-06-01T00:00:00Z", "to": "2026-06-02T00:00:00Z"},
             "outputs": {
-                "ndvi": {"bands": {"B0": {"stats": {"mean": 0.55, "sampleCount": 100, "noDataCount": 5}}}},
-                "evi":  {"bands": {"B0": {"stats": {"mean": 0.40}}}},
-                "savi": {"bands": {"B0": {"stats": {"mean": 0.45}}}},
-                "ndre": {"bands": {"B0": {"stats": {"mean": 0.30}}}},
-                "ndwi": {"bands": {"B0": {"stats": {"mean": 0.10}}}},
-                "reip": {"bands": {"B0": {"stats": {"mean": 718.4}}}},
+                "ndvi": {"bands": {"B0": {"stats": {"mean": 5500, "sampleCount": 100, "noDataCount": 5}}}},
+                "evi":  {"bands": {"B0": {"stats": {"mean": 4000}}}},
+                "savi": {"bands": {"B0": {"stats": {"mean": 4500}}}},
+                "ndre": {"bands": {"B0": {"stats": {"mean": 3000}}}},
+                "ndwi": {"bands": {"B0": {"stats": {"mean": 1000}}}},
+                "reip": {"bands": {"B0": {"stats": {"mean": 15360}}}},  # (718.4-680)*400
             },
         }],
     }
@@ -1189,17 +1191,19 @@ def test_fetch_multi_series_zwraca_ndti_z_odpowiedzi_statistical_api():
 
     geom = Polygon([(19.0, 50.0), (19.001, 50.0), (19.001, 50.001), (19.0, 50.001)])
 
+    # Wartości w kodowaniu INT16 z EVALSCRIPT_MULTI (wskaźniki x10000,
+    # REIP jako (reip-680) x 400) — patrz SKALOWANIE w analytics.py.
     fake_response_json = {
         "data": [{
             "interval": {"from": "2026-06-01T00:00:00Z", "to": "2026-06-02T00:00:00Z"},
             "outputs": {
-                "ndvi": {"bands": {"B0": {"stats": {"mean": 0.55, "sampleCount": 100, "noDataCount": 5}}}},
-                "evi":  {"bands": {"B0": {"stats": {"mean": 0.40}}}},
-                "savi": {"bands": {"B0": {"stats": {"mean": 0.45}}}},
-                "ndre": {"bands": {"B0": {"stats": {"mean": 0.30}}}},
-                "ndwi": {"bands": {"B0": {"stats": {"mean": 0.10}}}},
-                "reip": {"bands": {"B0": {"stats": {"mean": 718.4}}}},
-                "ndti": {"bands": {"B0": {"stats": {"mean": 0.22}}}},
+                "ndvi": {"bands": {"B0": {"stats": {"mean": 5500, "sampleCount": 100, "noDataCount": 5}}}},
+                "evi":  {"bands": {"B0": {"stats": {"mean": 4000}}}},
+                "savi": {"bands": {"B0": {"stats": {"mean": 4500}}}},
+                "ndre": {"bands": {"B0": {"stats": {"mean": 3000}}}},
+                "ndwi": {"bands": {"B0": {"stats": {"mean": 1000}}}},
+                "reip": {"bands": {"B0": {"stats": {"mean": 15360}}}},  # (718.4-680)*400
+                "ndti": {"bands": {"B0": {"stats": {"mean": 2200}}}},
             },
         }],
     }
@@ -1616,3 +1620,48 @@ def test_check_multi_udostepnia_score_low_high_w_odpowiedzi(app_client):
     assert cs["score_low"] is not None
     assert cs["score_high"] is not None
     assert cs["score_low"] <= cs["score"] <= cs["score_high"]
+
+
+# --- EVI2 i NDMI z B8A (listopad 2026) ------------------------------------
+
+@pytest.mark.parametrize("script_name", ["EVALSCRIPT_MULTI", "EVALSCRIPT_MULTI_RELAXED"])
+def test_evalscript_evi2_bez_niebieskiego_i_ndmi_z_b8a(script_name):
+    script = getattr(analytics, script_name)
+    assert "s.B02" not in script and '"B02"' not in script         # brak niebieskiego w kodzie JS
+    assert '"B8A"' in script
+    assert "2.4*RED" in script                                       # EVI2
+    assert "(NIR_N - SWIR1) / (NIR_N + SWIR1" in script              # NDMI z B8A
+
+
+def test_evalscript_multi_liczba_pasm_wejsciowych_bez_zmian():
+    """Koszt PU zależy od liczby pasm wejściowych: B02 wypadł, B8A doszedł."""
+    import re
+    m = re.search(r'bands: \[([^\]]+)\]', analytics.EVALSCRIPT_MULTI)
+    bands = [b.strip().strip('"') for b in m.group(1).split(",")]
+    assert len([b for b in bands if b != "dataMask"]) == 9
+
+
+def test_evi2_bliskie_evi_dla_gestej_okrywy():
+    NIR, RED, BLUE = 0.35, 0.06, 0.03
+    evi = 2.5 * (NIR - RED) / (NIR + 6.0 * RED - 7.5 * BLUE + 1.0)
+    evi2 = 2.5 * (NIR - RED) / (NIR + 2.4 * RED + 1.0)
+    assert abs(evi2 - evi) / evi < 0.08
+    assert evi2 >= analytics.THRESHOLDS["evi"]["low"]
+
+
+
+def test_ndwi_distribution_z_percentyli_i_histogramu():
+    outputs = {"ndwi": {"bands": {"B0": {
+        "stats": {"mean": 2800, "percentiles": {"10.0": 1200, "50.0": 3000}},
+        "histogram": {"bins": [
+            {"lowEdge": 1000, "highEdge": 1250, "count": 20},   # < 0.30-0.10 -> suchy
+            {"lowEdge": 1750, "highEdge": 2000, "count": 5},    # = granica 0.20 -> suchy
+            {"lowEdge": 2750, "highEdge": 3000, "count": 50},
+            {"lowEdge": 3000, "highEdge": 3250, "count": 25},
+        ]}}}}}
+    d = analytics._ndwi_distribution(outputs)
+    assert d == {"ndwi_p10": 0.12, "ndwi_p50": 0.30, "ndwi_low_frac": 0.25}
+
+
+def test_ndwi_distribution_none_gdy_brak_danych():
+    assert analytics._ndwi_distribution({}) == {"ndwi_p10": None, "ndwi_p50": None, "ndwi_low_frac": None}

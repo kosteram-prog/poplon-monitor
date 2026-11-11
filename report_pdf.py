@@ -161,7 +161,7 @@ def _parcel_section(data: dict) -> list:
 
     if peak:
         story.append(Paragraph("Dzień reprezentatywny (peak):", _STYLES["H2poplon"]))
-        rows = [["Data", "NDVI", "EVI", "SAVI", "NDRE", "NDWI"],
+        rows = [["Data", "NDVI", "EVI2", "SAVI", "NDRE", "NDMI"],
                 [peak.get("date", "—"), _fmt(peak.get("ndvi")), _fmt(peak.get("evi")),
                  _fmt(peak.get("savi")), _fmt(peak.get("ndre")), _fmt(peak.get("ndwi"))]]
         t = Table(rows, hAlign="LEFT")

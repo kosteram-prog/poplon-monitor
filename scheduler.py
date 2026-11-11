@@ -291,13 +291,51 @@ def detect_anomalies(parcel_db_id, typ, rok):
     return new_alarms
 
 
+def check_all_water_fields():
+    """Odpowiednik check_all_monitored_parcels dla modułu wodnego (Krok 3
+    planu teledetekcji i wody). W odróżnieniu od poplonów monitoring wodny
+    nie ma sezonowego okna (patrz water_stress.py) — sprawdzamy po prostu
+    wszystkie aktywne pola co interwał schedulera. Alert NIE trafia od razu
+    do rolnika (sekcja 4 planu) — tylko do kolejki triage (water_alarms);
+    powiadomienie operatora o nowej pozycji w kolejce to celowo NIE jest
+    jeszcze zrobione w tym kroku (notifier.py jest dziś zbudowany pod
+    konkretne typy alarmów poplonu, nie pod ogólną kolejkę triage)."""
+    import water_stress
+    log.info("START: sprawdzanie pol wodnych")
+    fields = db.get_water_fields(status="active")
+    log.info(f"Aktywnych pol wodnych: {len(fields)}")
+
+    for f in fields:
+        try:
+            water_stress.fetch_and_store_observation(f)
+            verdict = water_stress.build_verdict_for_field(f)
+            # Bilans wodny FAO-56 (nieblokujący): dokleja kontekst do
+            # werdyktu satelitarnego, a gdy satelita milczy, a model
+            # przewiduje stres w ciągu BALANCE_ALERT_DAYS dni — osobny alarm.
+            water_stress.attach_water_balance(f, verdict)
+            alarm_id = water_stress.record_alarm_if_risky(f, verdict)
+            if alarm_id:
+                log.warning(f"  ALARM wodny ({verdict['risk_type']}) pole id={f['id']} "
+                           f"-> water_alarms id={alarm_id}")
+            else:
+                bal_id = water_stress.record_balance_alarm_if_needed(f, verdict)
+                if bal_id:
+                    log.warning(f"  ALARM bilansu wodnego pole id={f['id']} -> water_alarms id={bal_id}")
+        except Exception as e:
+            log.error(f"Blad dla pola wodnego {f.get('parcel_id')} (id={f['id']}): {e}")
+
+    log.info("KONIEC: sprawdzanie pol wodnych")
+
+
 def start_scheduler():
     global _scheduler
     _scheduler = BackgroundScheduler()
     _scheduler.add_job(check_all_monitored_parcels, "interval", hours=48,
                        id="monitor_job", replace_existing=True)
+    _scheduler.add_job(check_all_water_fields, "interval", hours=48,
+                       id="water_monitor_job", replace_existing=True)
     _scheduler.start()
-    log.info("Scheduler uruchomiony (co 48h)")
+    log.info("Scheduler uruchomiony (co 48h, poplony + moduł wodny)")
 
 
 def stop_scheduler():

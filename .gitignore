@@ -33,6 +33,7 @@ secrets.json
 # OS
 .DS_Store
 Thumbs.db
+.fuse_hidden*
 
 # IDE
 .idea/

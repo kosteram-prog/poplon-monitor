@@ -34,6 +34,7 @@ from typing import Optional
 import requests
 
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
+OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
 # Próg przymrozka istotnego agronomicznie (nie zwykłe nocne ochłodzenie) —
 # poniżej tej temperatury minimalnej dobowej tkanka roślinna typowych
@@ -95,6 +96,8 @@ def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
         "tmean_c":      float | None,   # średnia temperatura dobowa [°C]
         "precip_mm":    float | None,   # suma opadów dobowych [mm]
         "radiation_mj": float | None,   # suma promieniowania krótkofalowego [MJ/m²]
+        "et0_mm":       float | None,   # ewapotranspiracja wskaźnikowa FAO-56
+                                        #   Penman-Monteith (Open-Meteo, ERA5) [mm]
     }
 
     Rzuca RuntimeError przy błędzie API — wywołujący (app.py check_multi)
@@ -113,8 +116,12 @@ def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
         "daily": ",".join([
             "temperature_2m_min", "temperature_2m_max", "temperature_2m_mean",
             "precipitation_sum", "shortwave_radiation_sum",
+            "et0_fao_evapotranspiration",
         ]),
-        "timezone": "Europe/Warsaw",
+        # Doby liczone w lokalnej strefie czasowej PUNKTU (dla Polski to
+        # i tak Europe/Warsaw) — dawniej na sztywno Europe/Warsaw, co dla
+        # pól w Uzbekistanie przesuwało granicę doby o 4 godziny.
+        "timezone": "auto",
     }
     try:
         r = requests.get(OPEN_METEO_ARCHIVE_URL, params=params, timeout=30)
@@ -131,6 +138,7 @@ def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
     tmeans = daily.get("temperature_2m_mean") or []
     precs  = daily.get("precipitation_sum") or []
     rads   = daily.get("shortwave_radiation_sum") or []
+    et0s   = daily.get("et0_fao_evapotranspiration") or []
 
     def _at(lst, i):
         return lst[i] if i < len(lst) else None
@@ -148,6 +156,80 @@ def fetch_weather_series(geom_4326, t_start: date, t_end: date) -> list[dict]:
             "tmean_c": _at(tmeans, i),
             "precip_mm": _at(precs, i),
             "radiation_mj": _at(rads, i),
+            "et0_mm": _at(et0s, i),
+        })
+    return out
+
+
+# Klimatyczny bilans wodny (CWB = suma opadu minus suma ET0 w oknie) —
+# zastępuje w module wodnym samą flagę "posucha" (dry_spell), która patrzy
+# tylko na opad: 14 dni bez deszczu w kwietniu (ET0 ~1.5 mm/d) i w lipcu
+# (ET0 ~4-5 mm/d) to zupełnie inny deficyt wody.
+CWB_MIN_DATA_FRAC = 0.8   # min. udział dni z kompletnym P i ET0 w oknie
+
+# Próg "deficytu atmosferycznego" w 14-dniowym oknie [mm]. Roboczy szacunek:
+# ok. 2 tygodnie przy ET0 ~3 mm/d i kilku mm deszczu. Używany tylko do
+# opisu kontekstu w werdykcie modułu wodnego, nie zmienia flagi ryzyka.
+CWB_DEFICIT_14D_MM = -30.0
+# Odpowiednio "wyraźnie mokro" — dodatni bilans, przy którym spadek NDMI
+# raczej nie wynika z pogody.
+CWB_SURPLUS_14D_MM = 10.0
+
+
+def climatic_water_balance(weather_series: list[dict], end_date: date,
+                           days: int) -> Optional[float]:
+    """Suma (opad − ET0) [mm] z `days` dni kończących się w `end_date`
+    (włącznie). None, gdy w oknie brakuje więcej niż (1−CWB_MIN_DATA_FRAC)
+    dni z kompletnymi danymi (np. opóźnienie ERA5 o kilka dni na końcu
+    okna) — lepiej nie podawać bilansu niż podać zaniżony brakami."""
+    start = end_date - timedelta(days=days - 1)
+    vals = [(r["precip_mm"] - r["et0_mm"]) for r in weather_series
+            if start <= r["date"] <= end_date
+            and r.get("precip_mm") is not None and r.get("et0_mm") is not None]
+    if len(vals) < CWB_MIN_DATA_FRAC * days:
+        return None
+    # Brakujące dni uzupełniamy średnią z dostępnych, żeby bilans dotyczył
+    # pełnego okna (inaczej 12 dni z 14 dawałoby systematycznie mniejszą sumę).
+    mean = sum(vals) / len(vals)
+    return round(mean * days, 1)
+
+
+def fetch_recent_and_forecast(geom_4326, past_days: int = 92,
+                              forecast_days: int = 10) -> list[dict]:
+    """Opad i ET0 (FAO-56) z ostatnich `past_days` dni + prognoza na
+    `forecast_days` dni — jedno zapytanie do API prognozy Open-Meteo.
+    W odróżnieniu od archiwum ERA5 (opóźnienie ok. 5 dni) nie ma tu dziury
+    między historią a dniem dzisiejszym, dlatego to źródło bilansu wodnego
+    (water_balance.py). Zwraca [{"date", "precip_mm", "et0_mm", "is_forecast"}]."""
+    c = geom_4326.centroid
+    params = {
+        "latitude": c.y, "longitude": c.x,
+        "daily": "precipitation_sum,et0_fao_evapotranspiration",
+        "past_days": int(past_days), "forecast_days": int(forecast_days),
+        "timezone": "auto",
+    }
+    try:
+        r = requests.get(OPEN_METEO_FORECAST_URL, params=params, timeout=30)
+    except requests.RequestException as e:
+        raise RuntimeError(f"Brak połączenia z Open-Meteo: {e}")
+    if r.status_code != 200:
+        raise RuntimeError(f"Open-Meteo błąd {r.status_code}: {r.text[:300]}")
+    daily = r.json().get("daily", {})
+    dates = daily.get("time") or []
+    precs = daily.get("precipitation_sum") or []
+    et0s = daily.get("et0_fao_evapotranspiration") or []
+    today = date.today()
+    out = []
+    for i, d_str in enumerate(dates):
+        try:
+            d = date.fromisoformat(d_str)
+        except ValueError:
+            continue
+        out.append({
+            "date": d,
+            "precip_mm": precs[i] if i < len(precs) else None,
+            "et0_mm": et0s[i] if i < len(et0s) else None,
+            "is_forecast": d > today,
         })
     return out
 
