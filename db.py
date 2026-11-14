@@ -176,6 +176,19 @@ def init_db():
             stats_json TEXT,
             created_at TEXT DEFAULT (datetime('now'))
         );
+        CREATE TABLE IF NOT EXISTS yield_analyses (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            label TEXT,
+            parcel_id TEXT,
+            geometry_wkt TEXT,
+            years_json TEXT,
+            fert_json TEXT,
+            soil_json TEXT,
+            status TEXT DEFAULT 'pending',
+            error TEXT,
+            stats_json TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
+        );
         CREATE TABLE IF NOT EXISTS replay_ratings (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             water_field_id INTEGER NOT NULL,
@@ -248,6 +261,12 @@ def init_db():
             ("water_observations", "sm_0_7", "REAL"),
             ("water_observations", "sm_7_28", "REAL"),
             ("water_observations", "sm_28_100", "REAL"),
+            # 11.2026: wskaźniki z tego samego zapytania S2 co NDMI (0 PU) —
+            # zieleń bez nasycenia (EVI2) i chlorofil (red-edge) do odróżnienia
+            # stresu wodnego od azotu/choroby.
+            ("water_observations", "evi2_mean", "REAL"),
+            ("water_observations", "ndre_mean", "REAL"),
+            ("water_observations", "cire_mean", "REAL"),
             ("irrigation_events", "amount_mm", "REAL"),
         ):
             try:
@@ -330,6 +349,16 @@ def init_db():
             sg_error TEXT,
             sg_error_at TEXT,
             updated_at TEXT DEFAULT (datetime('now'))
+        );
+        """)
+        # Podejrzenie zasolenia z wielolecia Sentinel-2 (salinity_scan.py): wynik
+        # (JSON) i mapa PNG — jeden, ostatni przebieg na pole.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS salinity_scans (
+            water_field_id INTEGER PRIMARY KEY,
+            result_json TEXT NOT NULL,
+            png BLOB,
+            created_at TEXT DEFAULT (datetime('now'))
         );
         """)
         # Zasolenie i wody gruntowe (doradca) + zgłoszenia rolnika (listopad 2026).
@@ -807,7 +836,26 @@ _WATER_OBS_EXTRA_COLUMNS = {
     "vpd_max_kpa", "tmax_c", "sm_0_7", "sm_7_28", "sm_28_100",
     "ndwi_p10", "ndwi_p50", "ndwi_low_frac",
     "s1_rel_orbit", "s1_date",
+    "evi2_mean", "ndre_mean", "cire_mean",
 }
+
+# Kolumny, które uzupełnienie historii dopisuje do JUŻ istniejących obserwacji
+# (gdy były zapisane, zanim moduł je liczył).
+WATER_OBS_FILLABLE = ("evi2_mean", "ndre_mean", "cire_mean")
+
+
+def fill_water_observation(water_field_id, obs_date, **vals) -> bool:
+    """Dopisuje brakujące (NULL) wartości do istniejącej obserwacji; nie
+    nadpisuje niczego, co już jest. True, gdy coś zmieniono."""
+    vals = {k: v for k, v in vals.items() if k in WATER_OBS_FILLABLE and v is not None}
+    if not vals:
+        return False
+    sets = ",".join(f"{k}=COALESCE({k}, ?)" for k in vals)
+    cond = " OR ".join(f"{k} IS NULL" for k in vals)
+    with _lock, _conn() as c:
+        cur = c.execute(f"UPDATE water_observations SET {sets} WHERE water_field_id=? AND obs_date=? AND ({cond})",
+                        list(vals.values()) + [water_field_id, obs_date])
+        return cur.rowcount > 0
 
 
 def add_water_observation(water_field_id, obs_date, ndwi_mean=None, ndvi_mean=None,
@@ -1030,6 +1078,24 @@ def save_field_soil(water_field_id, **kwargs):
                   (*cols.values(), water_field_id))
 
 
+def save_salinity_scan(water_field_id, result_json: str, png: bytes):
+    with _lock, _conn() as c:
+        c.execute("INSERT OR REPLACE INTO salinity_scans (water_field_id, result_json, png, created_at) "
+                  "VALUES (?,?,?,datetime('now'))", (water_field_id, result_json, png))
+
+
+def get_salinity_scan(water_field_id, with_png: bool = False):
+    """(wynik: dict, png: bytes | None) albo None."""
+    import json as _json
+    with _lock, _conn() as c:
+        r = c.execute("SELECT result_json, png, created_at FROM salinity_scans WHERE water_field_id=?",
+                      (water_field_id,)).fetchone()
+    if not r:
+        return None
+    res = {**_json.loads(r["result_json"]), "saved_at": r["created_at"]}
+    return (res, bytes(r["png"]) if with_png and r["png"] is not None else None)
+
+
 # ---------------------------------------------------------------------------
 # soil_checks — punkty kontrolne wilgotności gleby (patrz water_balance)
 # ---------------------------------------------------------------------------
@@ -1048,6 +1114,11 @@ def get_soil_checks(water_field_id):
         rows = c.execute("SELECT * FROM soil_checks WHERE water_field_id=? ORDER BY check_date ASC, id ASC",
                          (water_field_id,)).fetchall()
         return [dict(r) for r in rows]
+
+
+def delete_irrigation_event(event_id):
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM irrigation_events WHERE id=?", (event_id,)).rowcount
 
 
 def delete_soil_check(check_id):
@@ -1123,6 +1194,42 @@ def delete_replay_rating(rating_id):
 # ---------------------------------------------------------------------------
 # yield_maps — mapy stref plonu MVI (yield_mvi.py); pliki w uploads/yield_maps/<id>/
 # ---------------------------------------------------------------------------
+
+def add_yield_analysis(**kw):
+    cols = ["label", "parcel_id", "geometry_wkt", "years_json", "fert_json"]
+    vals = [kw.get(c) for c in cols]
+    with _lock, _conn() as c:
+        cur = c.execute(f"INSERT INTO yield_analyses ({','.join(cols)}) VALUES ({','.join('?' * len(cols))})", vals)
+        return cur.lastrowid
+
+
+def update_yield_analysis(aid, status=None, stats_json=None, error=None, fert_json=None, soil_json=None):
+    sets, vals = [], []
+    for col, v in (("status", status), ("stats_json", stats_json), ("error", error),
+                   ("fert_json", fert_json), ("soil_json", soil_json)):
+        if v is not None:
+            sets.append(f"{col}=?"); vals.append(v)
+    if not sets:
+        return
+    with _lock, _conn() as c:
+        c.execute(f"UPDATE yield_analyses SET {','.join(sets)} WHERE id=?", (*vals, aid))
+
+
+def get_yield_analyses():
+    with _lock, _conn() as c:
+        return [dict(r) for r in c.execute("SELECT * FROM yield_analyses ORDER BY id DESC").fetchall()]
+
+
+def get_yield_analysis(aid):
+    with _lock, _conn() as c:
+        r = c.execute("SELECT * FROM yield_analyses WHERE id=?", (aid,)).fetchone()
+        return dict(r) if r else None
+
+
+def delete_yield_analysis(aid):
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM yield_analyses WHERE id=?", (aid,)).rowcount
+
 
 def add_yield_map(**kw):
     cols = ["label", "parcel_id", "crop_type", "season_year", "date_from", "date_to",

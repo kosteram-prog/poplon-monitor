@@ -432,7 +432,7 @@ def field_balance_summary(field: dict, use_cache: bool = True) -> dict:
             hit = _balance_cache.get(key)
             if hit and now - hit[0] < BALANCE_CACHE_TTL_S:
                 return hit[1]
-    summary = water_balance.compute_field_balance(field)["summary"]
+    summary = water_balance.compute_field_balance(field, quick_soil=True)["summary"]
     with _balance_lock:
         _balance_cache[key] = (now, summary)
     return summary

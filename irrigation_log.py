@@ -404,6 +404,14 @@ def irrigation_event_add(water_field_id: int, req: IrrigationEventRequest,
     return {"id": event_id, "water_field_id": water_field_id, "status": "added"}
 
 
+@router.delete("/irrigation/{event_id}")
+def irrigation_event_delete(event_id: int, _auth=Depends(require_operator_key)):
+    """Usuwa błędny wpis z dziennika (np. pomyłka w dacie albo dawce)."""
+    if not db.delete_irrigation_event(event_id):
+        raise HTTPException(status_code=404, detail="Nie ma takiego wpisu nawodnienia")
+    return {"status": "deleted"}
+
+
 @router.get("/field/{water_field_id}/irrigation")
 def irrigation_event_list(water_field_id: int):
     _get_field_or_404(water_field_id)
@@ -547,13 +555,17 @@ class FieldSoilRequest(BaseModel):
     gw_depth_m: Optional[float] = Field(None, ge=0, le=30)
 
 
-def _soil_payload(field: dict, fetch: bool = True) -> dict:
+def _soil_payload(field: dict, fetch: bool = True, quick: bool = True) -> dict:
+    import salinity_scan
     import soil_water
-    t = soil_water.field_taw(field, fetch=fetch)
+    t = soil_water.field_taw(field, fetch=fetch, quick=quick)
+    scan = db.get_salinity_scan(field["id"])
     row = db.get_field_soil(field["id"]) or {}
     return {**t, "sg_fetched_at": row.get("sg_fetched_at"), "sg_error": row.get("sg_error"),
             "salinity": soil_water.field_salinity(field, row, t.get("texture")),
             "manual_taw_mm": field.get("soil_taw_mm"),
+            "salinity_scan": scan[0] if scan else None,
+            "salinity_scan_pu": salinity_scan.estimate_pu(field),
             "classes": [{"key": k, "awc_mm_m": round(soil_water.awc_mm_per_m(s, c))}
                         for k, (s, c) in soil_water.TEXTURE_CLASSES.items()],
             "attribution": soil_water.SOILGRIDS_ATTRIBUTION if t.get("texture_from") == "soilgrids" or t.get("sand") else None}
@@ -598,7 +610,30 @@ def field_soil_refresh(water_field_id: int, _auth=Depends(require_operator_key))
     """Pobiera profil SoilGrids na nowo (np. po zmianie granic pola)."""
     field = _get_field_or_404(water_field_id)
     db.save_field_soil(water_field_id, sg_profile_json=None, sg_fetched_at=None, sg_error=None, sg_error_at=None)
-    return _soil_payload(field)
+    return _soil_payload(field, quick=False)
+
+
+@router.post("/field/{water_field_id}/salinity_scan")
+def field_salinity_scan(water_field_id: int, _auth=Depends(require_operator_key)):
+    """Podejrzenie zasolenia z 6 sezonów Sentinel-2 (salinity_scan.py). ~1 PU/rok, do ~1 min."""
+    import salinity_scan
+    field = _get_field_or_404(water_field_id)
+    if not field.get("geometry_wkt"):
+        raise HTTPException(status_code=422, detail="Pole nie ma obrysu.")
+    try:
+        return salinity_scan.scan_field(field)
+    except Exception as e:
+        log.exception("Skan zasolenia pola %s", water_field_id)
+        raise HTTPException(status_code=502, detail=f"Skan zasolenia nie powiódł się: {e}")
+
+
+@router.get("/field/{water_field_id}/salinity_scan.png")
+def field_salinity_scan_png(water_field_id: int):
+    from fastapi.responses import Response
+    got = db.get_salinity_scan(water_field_id, with_png=True)
+    if not got or not got[1]:
+        raise HTTPException(status_code=404, detail="Brak skanu zasolenia dla tego pola.")
+    return Response(content=got[1], media_type="image/png", headers={"Cache-Control": "no-cache"})
 
 
 class SoilCheckRequest(BaseModel):
@@ -771,7 +806,7 @@ def water_field_balance(water_field_id: int):
     field = _get_field_or_404(water_field_id)
     try:
         import water_balance
-        return water_balance.compute_field_balance(field)
+        return water_balance.compute_field_balance(field, quick_soil=True)
     except Exception as e:
         log.exception("Blad bilansu wodnego dla pola id=%s", water_field_id)
         raise HTTPException(status_code=502, detail=f"Blad bilansu wodnego: {e}")
@@ -864,7 +899,7 @@ def water_thermal_delete(water_field_id: int, _auth=Depends(require_operator_key
 
 
 class PrepareStepRequest(BaseModel):
-    step: str = Field(..., pattern="^(backfill|optram|thermal|check_now)$")
+    step: str = Field(..., pattern="^(backfill|optram|thermal|soil|check_now)$")
 
 
 @router.get("/field/{water_field_id}/prepare_plan")

@@ -3666,6 +3666,54 @@ async function applyCalibration(newHigh, newMid){
     <div class="card-b"><div id="yieldList"></div>
       <p class="hint" style="margin-top:8px" data-i18n="y_caveat">MVI zwalidowano na kukurydzy i soi w USA (Landsat). Dla polskich upraw traktuj mapę jako względną (gdzie w polu lepiej / gorzej) do czasu porównania z mapą plonu z kombajnu.</p></div>
   </section>
+  <section class="card" style="margin-bottom:20px">
+    <div class="card-h" data-i18n="ma_h">Strefy z wielolecia + nawożenie zmienną dawką</div>
+    <div class="card-b">
+      <p class="hint" style="margin-bottom:12px" data-i18n="ma_intro">Podaj płodozmian i plony z kilku lat (np. 5) — dla każdego roku liczę względną mapę plonu w oknie sezonu danej uprawy, a strefy wyznaczam ze średniej wszystkich lat. Opcjonalnie podaj średnią dawkę nawozu — rozpiszę ją na strefy i przygotuję plik dla siewnika/rozsiewacza oraz raport PDF.</p>
+      <div class="monitor-grid">
+        <div>
+          <div class="field"><label data-i18n="y_label">Nazwa</label>
+            <input type="text" id="maLabel" placeholder="np. LENs-07 — pole za stodołą"></div>
+          <div class="field"><label><span data-i18n="y_pid">Numer działki</span> <span class="hint" data-i18n="y_pid_hint">(TERYT; kilka sąsiednich — po przecinku)</span></label>
+            <input class="mono" type="text" id="maPid" placeholder="141201_1.0001.6509"></div>
+          <div class="field"><label><span data-i18n="y_geom">Obrys pola (WKT)</span> <span class="hint" data-i18n="w_geom_opt">(niepotrzebna dla polskich działek)</span></label>
+            <button class="secondary" type="button" style="font-size:12.5px;margin:2px 0 8px" onclick="wmOpen({pid:'maPid', wkt:'maWkt', pin:false})">🗺️ <span data-i18n="y_map_pick">Zaznacz pole na mapie</span></button>
+            <textarea id="maWkt" rows="2" class="mono" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:9px;font-size:12px;resize:vertical"></textarea></div>
+          <label style="font-weight:600;font-size:13px" data-i18n="ma_years_h">Płodozmian i plony</label>
+          <div style="display:grid;grid-template-columns:86px 1fr 96px 30px;gap:6px;margin:6px 0 2px;font-size:11.5px;color:var(--muted)">
+            <span data-i18n="y_year">Rok</span><span data-i18n="y_crop">Uprawa</span><span data-i18n="ma_yield_col">Plon [t/ha]</span><span></span></div>
+          <div id="maYears"></div>
+          <button class="secondary" type="button" style="font-size:12px;margin-top:4px" onclick="maAddYear()" data-i18n="ma_add_year">+ dodaj rok</button>
+        </div>
+        <div>
+          <label style="font-weight:600;font-size:13px" data-i18n="ma_fert_h">Nawożenie (opcjonalnie — można też ustawić po policzeniu)</label>
+          <div class="field" style="margin-top:8px"><label data-i18n="ma_fert_name">Nawóz</label>
+            <input type="text" id="maFertName" data-i18n-ph="ma_fert_name_ph" placeholder="np. NPK 6-20-30"></div>
+          <div class="row2 field">
+            <div><label data-i18n="ma_dose">Dawka średnia [kg/ha]</label>
+              <input type="number" id="maDose" step="1" min="1" max="5000" placeholder="np. 300"></div>
+            <div><label data-i18n="ma_strategy">Strategia</label>
+              <select id="maStrategy" style="width:100%;border:1px solid var(--line);border-radius:7px;padding:9px;font:inherit;background:var(--input-bg)">
+                <option value="potencjal" data-i18n="ma_strat_pot">pod potencjał (więcej w strefach mocnych)</option>
+                <option value="wyrownawcza" data-i18n="ma_strat_wyr">wyrównawcza (więcej w strefach słabych)</option>
+              </select></div>
+          </div>
+          <div class="row2 field">
+            <div><label data-i18n="ma_dose_min">Dawka min [kg/ha]</label><input type="number" id="maDoseMin" step="1" min="0"></div>
+            <div><label data-i18n="ma_dose_max">Dawka max [kg/ha]</label><input type="number" id="maDoseMax" step="1" min="1"></div>
+          </div>
+          <button class="primary" id="maBtn" type="button" onclick="maCreate()" data-i18n="ma_btn">Policz strefy z wielolecia</button>
+          <div class="error" id="maErr" style="margin-top:10px"></div>
+          <p class="hint" style="margin-top:10px" data-i18n="ma_caveat">Dawki wyliczone z rozkładu potencjału plonowania — nie korygują automatycznie o zasobność gleby; tabela prób glebowych służy do ręcznej korekty przez agronoma. Plik SHP (WGS84, atrybut RATE w kg/ha) wgrywa się do terminala maszyny.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+  <section class="card" style="margin-bottom:24px">
+    <div class="card-h" data-i18n="ma_list_h">Zapisane analizy wieloletnie</div>
+    <div class="card-b"><div id="maList"></div><div id="maDetail" style="margin-top:10px;font-size:12.5px"></div></div>
+  </section>
+  <input type="file" id="maSoilFile" accept=".csv,text/csv" style="display:none">
 </div>
 
 <div class="page-water" id="viewWater" style="display:none">
@@ -3871,6 +3919,8 @@ switchTab = function(mode){
     const y = document.getElementById('yYear');
     if(!y.value){ y.value = new Date().getFullYear(); yieldFillWindow(); }
     loadYieldList();
+    maEnsureYears();
+    loadMaList();
   }
 };
 
@@ -3992,6 +4042,242 @@ async function yieldDelete(id){
   if(!confirm(t('y_confirm_del'))) return;
   await fetch(`/api/yield/map/${id}`, {method:'DELETE'});
   loadYieldList();
+}
+
+/* --- Strefy z wielolecia + nawożenie zmienną dawką --- */
+const MA_INP = 'border:1px solid var(--line);border-radius:7px;padding:7px;font:inherit;background:var(--input-bg);width:100%';
+const MA_CROPS = ['kukurydza','pszenica','jęczmień','pszenżyto','żyto','rzepak','soja','burak cukrowy','ziemniak','bawełna'];
+let maPollTimer = null, maSoilTarget = null;
+
+function maEnsureYears(){
+  const box = document.getElementById('maYears');
+  if(box.children.length) return;
+  const n = new Date();
+  const y0 = n.getMonth() >= 6 ? n.getFullYear() : n.getFullYear() - 1;
+  for(let y = y0 - 4; y <= y0; y++) maAddYear(y);
+}
+
+function maAddYear(year){
+  const box = document.getElementById('maYears');
+  const row = document.createElement('div');
+  row.className = 'ma-year-row';
+  row.style.cssText = 'display:grid;grid-template-columns:86px 1fr 96px 30px;gap:6px;margin-bottom:6px;align-items:center';
+  row.innerHTML = `
+    <input type="number" class="ma-year" min="2017" max="2100" value="${year || ''}" style="${MA_INP}">
+    <select class="ma-crop" style="${MA_INP}">${MA_CROPS.map(c => `<option>${c}</option>`).join('')}</select>
+    <input type="number" class="ma-yield" step="0.1" min="0.1" max="200" placeholder="t/ha" style="${MA_INP}">
+    <button class="secondary" type="button" style="font-size:11px;padding:4px 7px" onclick="this.parentElement.remove()">✕</button>`;
+  box.appendChild(row);
+}
+
+function maCollectYears(){
+  const out = [];
+  document.querySelectorAll('#maYears .ma-year-row').forEach(r => {
+    const year = parseInt(r.querySelector('.ma-year').value, 10);
+    const crop = r.querySelector('.ma-crop').value;
+    const yld = parseFloat(r.querySelector('.ma-yield').value);
+    if(year && crop && yld) out.push({year, crop, yield_t_ha: yld});
+  });
+  return out;
+}
+
+function maFertParams(prefix){
+  const g = id => document.getElementById(prefix + id);
+  const dose = parseFloat(g('Dose').value);
+  if(!dose) return null;
+  const mn = parseFloat(g('DoseMin').value), mx = parseFloat(g('DoseMax').value);
+  return {fert_name: g('FertName').value.trim() || null, avg_dose_kg_ha: dose,
+          strategy: g('Strategy').value, rounding_kg: 5,
+          dose_min_kg_ha: isNaN(mn) ? null : mn, dose_max_kg_ha: isNaN(mx) ? null : mx};
+}
+
+async function maCreate(){
+  const btn = document.getElementById('maBtn'), err = document.getElementById('maErr');
+  err.style.display = 'none';
+  const years = maCollectYears();
+  if(years.length < 2){ err.textContent = t('ma_err_years'); err.style.display = 'block'; return; }
+  const body = {
+    label: document.getElementById('maLabel').value.trim() || null,
+    parcel_id: document.getElementById('maPid').value.trim() || null,
+    geometry_wkt: document.getElementById('maWkt').value.trim() || null,
+    years, fertilizer: maFertParams('ma')};
+  btn.disabled = true; btn.textContent = tf('ma_running', {n: years.length});
+  try{
+    const r = await fetch('/api/yield/analysis', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json();
+    if(!r.ok) throw new Error(Array.isArray(d.detail) ? (d.detail[0]?.msg || r.status) : (d.detail || r.status));
+    await loadMaList();
+    maStartPoll();
+  }catch(e){ err.textContent = trServer(e.message); err.style.display = 'block'; }
+  finally{ btn.disabled = false; btn.textContent = t('ma_btn'); }
+}
+
+function maStartPoll(){
+  if(maPollTimer) return;
+  maPollTimer = setInterval(async () => {
+    const running = await loadMaList();
+    if(!running){ clearInterval(maPollTimer); maPollTimer = null; }
+  }, 5000);
+}
+
+async function loadMaList(){
+  const el = document.getElementById('maList');
+  let running = false;
+  try{
+    const r = await fetch('/api/yield/analysis');
+    const list = await r.json();
+    if(!list.length){ el.innerHTML = `<p class="empty-hint">${esc(t('ma_none'))}</p>`; return false; }
+    running = list.some(a => a.status === 'running' || a.status === 'pending');
+    el.innerHTML = `<table style="width:100%;font-size:12px;border-collapse:collapse">
+      <tr style="color:var(--muted)"><th style="text-align:left">${esc(t('y_label'))}</th><th>${esc(t('ma_years_col'))}</th>
+        <th>CV</th><th></th></tr>
+      ${list.map(a => {
+        const ys = (a.years || []).map(y => y.year);
+        const span = ys.length ? Math.min(...ys) + '–' + Math.max(...ys) : '—';
+        const ok = a.stats ? ` (${a.stats.years_ok}/${(a.years || []).length})` : '';
+        let act;
+        if(a.status === 'done'){
+          act = `<button class="secondary" style="font-size:11px;padding:2px 8px" type="button" onclick="maShow(${a.id})">${esc(t('ma_show'))}</button>`;
+        } else if(a.status === 'error'){
+          act = `<span class="hint" title="${esc(a.error || '')}">⚠ ${esc(t('ma_failed'))}</span>`;
+        } else {
+          act = `<span class="hint">⏳ ${esc(t('ma_running_badge'))}</span>`;
+        }
+        return `<tr style="border-top:1px solid #EEF1EA">
+        <td style="padding:4px 0">${esc(a.label || a.parcel_id || ('#' + a.id))}</td>
+        <td style="text-align:center">${esc(span + ok)}</td>
+        <td style="text-align:center">${a.stats ? a.stats.cv_pct + '%' : '…'}</td>
+        <td style="text-align:right;white-space:nowrap">${act}
+          <button class="secondary" style="font-size:11px;padding:2px 6px" type="button" onclick="maDelete(${a.id})">✕</button></td>
+      </tr>`;}).join('')}</table>`;
+  }catch(e){ el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`; }
+  return running;
+}
+
+async function maShow(id){
+  initYieldMap();
+  const r = await fetch(`/api/yield/analysis/${id}`);
+  const a = await r.json();
+  if(!r.ok || !a.stats) return;
+  const s = a.stats, b = s.bounds;
+  yieldLayer.clearLayers();
+  const bounds = [[b[1], b[0]], [b[3], b[2]]];
+  L.imageOverlay(`/api/yield/analysis/${id}/file/nakladka.png`, bounds, {opacity:0.85}).addTo(yieldLayer);
+  if(a.zones_geojson) L.geoJSON(a.zones_geojson, {style: f => ({color:'#222', weight:0.6, fillOpacity:0, opacity:0.5}),
+    onEachFeature: (f, l) => l.bindTooltip(f.properties.label)}).addTo(yieldLayer);
+  const polys = parseWktPolygons(a.geometry_wkt);
+  if(polys.length) L.polygon(polys, {color:'#fff', weight:2, fill:false}).addTo(yieldLayer);
+  yieldMap.fitBounds(bounds, {padding:[20, 20], maxZoom:18});
+  document.getElementById('yMapTitle').textContent = `${t('ma_h')}: ${a.label || a.parcel_id || ('#' + id)}`;
+  document.getElementById('yieldMap').scrollIntoView({behavior:'smooth', block:'center'});
+
+  const fert = s.fertilizer, dose = {};
+  if(fert) fert.zones.forEach(z => dose[z.zone] = z);
+  const zrows = s.zones.filter(z => z.area_ha).map(z => `<tr>
+      <td><span style="display:inline-block;width:12px;height:12px;border-radius:3px;background:${z.color};vertical-align:middle"></span> ${esc(z.label)}</td>
+      <td style="text-align:center">${z.area_ha} ha</td><td style="text-align:center">${z.share_pct}%</td>
+      <td style="text-align:center">${z.mean_rel_pct != null ? z.mean_rel_pct + '%' : '—'}</td>
+      <td style="text-align:center">${z.interyear_cv_pct != null ? z.interyear_cv_pct + '%' : '—'}</td>
+      ${fert ? `<td style="text-align:center;font-weight:600">${dose[z.zone] ? dose[z.zone].dose_kg_ha + ' kg/ha' : '—'}</td>
+      <td style="text-align:center">${dose[z.zone] ? Math.round(dose[z.zone].dose_total_kg) + ' kg' : '—'}</td>` : ''}
+    </tr>`).join('');
+
+  const yrsLine = s.years.map(y => y.status === 'ok'
+      ? `${y.year} ${esc(y.crop)} ${y.yield_t_ha} t/ha`
+      : `<s title="${esc(y.error || '')}">${y.year} ${esc(y.crop)}</s> (${esc(t('ma_skipped'))})`).join(' · ');
+
+  const fp = a.fertilizer_params || {};
+  const soil = a.soil;
+  let soilHtml = '';
+  if(soil && soil.zone_summary && soil.zone_summary.length){
+    soilHtml = `<div style="margin-top:10px;font-weight:600">${esc(t('ma_soil_h'))}</div>
+      <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:4px">
+      <tr style="color:var(--muted)"><th style="text-align:left">${esc(t('y_zone'))}</th><th>n</th><th>pH</th><th>P₂O₅</th><th>K₂O</th><th>Mg</th><th>${esc(t('ma_humus'))}</th></tr>
+      ${soil.zone_summary.map(zz => `<tr style="border-top:1px solid #EEF1EA"><td>${esc(zz.label)}</td><td style="text-align:center">${zz.n}</td>
+        <td style="text-align:center">${zz.ph != null ? zz.ph : '—'}</td><td style="text-align:center">${zz.p2o5 != null ? zz.p2o5 : '—'}</td>
+        <td style="text-align:center">${zz.k2o != null ? zz.k2o : '—'}</td><td style="text-align:center">${zz.mg != null ? zz.mg : '—'}</td>
+        <td style="text-align:center">${zz.humus != null ? zz.humus : '—'}</td></tr>`).join('')}</table>`;
+  }
+
+  document.getElementById('maDetail').innerHTML = `
+    <div style="font-weight:600">${esc(a.label || a.parcel_id || ('#' + id))}</div>
+    <div class="hint" style="margin:2px 0 6px">${yrsLine}</div>
+    <div>${esc(tf('ma_summary', {ok: s.years_ok, n: s.years.length, cv: s.cv_pct,
+      stab: s.stable_share_pct != null ? s.stable_share_pct : '—',
+      ha: s.field_area_ha != null ? s.field_area_ha : s.area_ha}))}</div>
+    ${s.high_variability ? `<div style="margin-top:6px;padding:6px 8px;background:var(--amber-light);border-radius:6px">⚠ ${esc(t('y_high_cv'))}</div>` : ''}
+    <table style="width:100%;font-size:12px;border-collapse:collapse;margin-top:6px">
+      <tr style="color:var(--muted)"><th style="text-align:left">${esc(t('y_zone'))}</th><th>${esc(t('y_area'))}</th><th>${esc(t('y_share'))}</th>
+        <th>${esc(t('ma_rel'))}</th><th>${esc(t('ma_stab'))}</th>${fert ? `<th>${esc(t('ma_dose_col'))}</th><th>${esc(t('ma_total'))}</th>` : ''}</tr>${zrows}</table>
+    ${fert ? `<div class="hint" style="margin-top:4px">${esc(fert.fert_name || '')} ${esc(tf('ma_fert_summary', {eff: fert.effective_avg_kg_ha, tot: Math.round(fert.total_kg), ha: fert.area_ha}))}</div>` : ''}
+    ${soil && soil.warnings && soil.warnings.length ? `<div class="hint" style="margin-top:4px">⚠ ${soil.warnings.map(esc).join('; ')}</div>` : ''}
+    ${soilHtml}
+    <div style="margin-top:10px;display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px;align-items:end">
+      <div><label style="font-size:11.5px;color:var(--muted)">${esc(t('ma_fert_name'))}</label>
+        <input type="text" id="mdFertName" value="${esc(fp.fert_name || '')}" style="${MA_INP}"></div>
+      <div><label style="font-size:11.5px;color:var(--muted)">${esc(t('ma_dose'))}</label>
+        <input type="number" id="mdDose" step="1" min="1" value="${fp.avg_dose_kg_ha || ''}" style="${MA_INP}"></div>
+      <div><label style="font-size:11.5px;color:var(--muted)">${esc(t('ma_strategy'))}</label>
+        <select id="mdStrategy" style="${MA_INP}">
+          <option value="potencjal" ${fp.strategy !== 'wyrownawcza' ? 'selected' : ''}>${esc(t('ma_strat_pot'))}</option>
+          <option value="wyrownawcza" ${fp.strategy === 'wyrownawcza' ? 'selected' : ''}>${esc(t('ma_strat_wyr'))}</option>
+        </select></div>
+      <div><label style="font-size:11.5px;color:var(--muted)">${esc(t('ma_dose_min'))}</label>
+        <input type="number" id="mdDoseMin" step="1" min="0" value="${fp.dose_min_kg_ha != null ? fp.dose_min_kg_ha : ''}" style="${MA_INP}"></div>
+      <div><label style="font-size:11.5px;color:var(--muted)">${esc(t('ma_dose_max'))}</label>
+        <input type="number" id="mdDoseMax" step="1" min="1" value="${fp.dose_max_kg_ha != null ? fp.dose_max_kg_ha : ''}" style="${MA_INP}"></div>
+      <button class="secondary" type="button" style="font-size:12px" onclick="maApplyFert(${id})">${esc(t('ma_apply_fert'))}</button>
+    </div>
+    <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+      <a class="secondary" style="font-size:12px" href="/api/yield/analysis/${id}/report.pdf">⬇ ${esc(t('ma_pdf'))}</a>
+      ${fert ? `<a class="secondary" style="font-size:12px" href="/api/yield/analysis/${id}/file/dawki_shp.zip">⬇ ${esc(t('ma_shp'))}</a>
+      <a class="secondary" style="font-size:12px" href="/api/yield/analysis/${id}/file/dawki.geojson">⬇ ${esc(t('ma_dawki_geojson'))}</a>` : ''}
+      <a class="secondary" style="font-size:12px" href="/api/yield/analysis/${id}/file/strefy.geojson">⬇ ${esc(t('y_zones_geojson'))}</a>
+      <a class="secondary" style="font-size:12px" href="/api/yield/analysis/${id}/file/rel_sredni.tif">⬇ GeoTIFF</a>
+      <button class="secondary" type="button" style="font-size:12px" onclick="maSoilPick(${id})">📄 ${esc(t('ma_soil'))}</button>
+    </div>`;
+}
+
+async function maApplyFert(id){
+  const g = x => document.getElementById(x);
+  const dose = parseFloat(g('mdDose').value);
+  if(!dose) return;
+  const mn = parseFloat(g('mdDoseMin').value), mx = parseFloat(g('mdDoseMax').value);
+  const body = {fert_name: g('mdFertName').value.trim() || null, avg_dose_kg_ha: dose,
+                strategy: g('mdStrategy').value, rounding_kg: 5,
+                dose_min_kg_ha: isNaN(mn) ? null : mn, dose_max_kg_ha: isNaN(mx) ? null : mx};
+  const r = await fetch(`/api/yield/analysis/${id}/fertilizer`, {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if(!r.ok){ alert(trServer(Array.isArray(d.detail) ? (d.detail[0]?.msg || '') : (d.detail || ''))); return; }
+  maShow(id);
+}
+
+function maSoilPick(id){
+  maSoilTarget = id;
+  const inp = document.getElementById('maSoilFile');
+  inp.value = '';
+  inp.onchange = maSoilUpload;
+  inp.click();
+}
+
+async function maSoilUpload(){
+  const inp = document.getElementById('maSoilFile');
+  if(!inp.files.length || maSoilTarget == null) return;
+  const fd = new FormData();
+  fd.append('file', inp.files[0]);
+  const r = await fetch(`/api/yield/analysis/${maSoilTarget}/soil`, {method:'POST', body: fd});
+  const d = await r.json();
+  if(!r.ok){ alert(trServer(Array.isArray(d.detail) ? (d.detail[0]?.msg || '') : (d.detail || ''))); return; }
+  alert(tf('ma_soil_ok', {n: d.n_samples}) + (d.warnings && d.warnings.length ? '\n⚠ ' + d.warnings.join('\n⚠ ') : ''));
+  maShow(maSoilTarget);
+}
+
+async function maDelete(id){
+  if(!confirm(t('ma_confirm_del'))) return;
+  await fetch(`/api/yield/analysis/${id}`, {method:'DELETE'});
+  document.getElementById('maDetail').innerHTML = '';
+  loadMaList();
 }
 
 document.getElementById('tabWater').addEventListener('click', () => switchTab('water'));
@@ -4799,24 +5085,50 @@ async function waterOverviewLoadAll(ids){
   }
 }
 
+// Numer ostatniego zapytania o „Pełny obraz” per pole. Odpowiedź na starsze
+// zapytanie (np. ładowanie przy otwarciu panelu, które trwało dłużej niż
+// „Przygotuj / odśwież wszystko”) nie może nadpisać świeższego wykresu.
+const _ovReq = {};
+
 async function waterOverviewLoad(id){
   const el = document.getElementById(`waterOverview_${id}`);
   if(!el) return;
   el.dataset.open = '1';
   if(!el.innerHTML) el.innerHTML = `<p class="hint" style="margin-top:8px">${esc(t('ov_loading'))}</p>`;
+  const my = _ovReq[id] = (_ovReq[id] || 0) + 1;
   try{
     const r = await fetch(`/api/water/field/${id}/overview`);
     const d = await r.json();
+    if(my !== _ovReq[id]) return;
     if(!r.ok) throw new Error(d.detail || r.status);
     renderOverview(id, d);
-  }catch(e){ el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`; }
+  }catch(e){
+    if(my !== _ovReq[id]) return;
+    el.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`;
+  }
+}
+
+function ovStepLabel(s){
+  return t('ov_step_' + s.step + (s.mode === 'refresh' ? '_refresh' : ''));
+}
+
+function ovStepReason(s){
+  const key = 'ov_reason_' + s.reason;
+  if(t(key) === key) return '';   // powód bez opisu (pusty tekst w tłumaczeniu)
+  return tf(key, {ha: s.area_ha == null ? '' : s.area_ha.toFixed(1),
+    from: s.from ? ovFmtDate(s.from) : '', mm: s.taw_mm == null ? '' : Math.round(s.taw_mm)});
 }
 
 function ovStepResult(r){
-  if(!r.ok) return `<span style="color:#B3261E">✗ ${esc(trServer(r.error || ''))}</span>`;
-  const txt = r.step === 'backfill' ? tf('ov_res_backfill', {n: r.stored, c: r.clean})
-    : r.step === 'optram' ? tf('ov_res_optram', {q: t('op_q_' + r.quality), r: r.era5_r == null ? '—' : r.era5_r.toFixed(2)})
+  if(!r.ok){
+    const extra = r.step === 'soil' ? ' — ' + tf('ov_res_soil_default', {mm: r.taw_mm == null ? 100 : Math.round(r.taw_mm)}) : '';
+    return `<span style="color:#B3261E">✗ ${esc(trServer(r.error || ''))}${esc(extra)}</span>`;
+  }
+  const txt = r.step === 'backfill' ? tf('ov_res_backfill', {n: r.stored, c: r.clean}) + (r.updated ? tf('ov_res_backfill_upd', {u: r.updated}) : '')
+    : r.step === 'optram' ? (r.mode === 'refresh' ? tf('ov_res_optram_refresh', {n: r.n_new})
+      : tf('ov_res_optram', {q: t('op_q_' + r.quality), r: r.era5_r == null ? '—' : r.era5_r.toFixed(2)}))
     : r.step === 'thermal' ? tf('ov_res_thermal', {n: r.n_scenes})
+    : r.step === 'soil' ? tf('ov_res_soil', {mm: Math.round(r.taw_mm)})
     : t(r.fresh ? 'ov_res_check_fresh' : 'ov_res_check_none');
   return `<span style="color:#2E7D32">✓ ${esc(txt)}</span>`;
 }
@@ -4828,18 +5140,18 @@ async function waterPrepareAll(id, btn){
   catch(e){ box.innerHTML = `<p class="empty-hint">${esc(t('cs_error'))}: ${esc(e.message)}</p>`; return; }
   const todo = plan.steps.filter(s => s.run);
   if(!todo.length){ box.innerHTML = `<p class="hint">${esc(t('ov_prep_nothing'))}</p>`; return; }
-  const list = todo.map(s => '• ' + t('ov_step_' + s.step) + ` (~${s.est_pu} PU)`).join('\n');
+  const list = todo.map(s => '• ' + ovStepLabel(s) + (s.est_pu ? ` (~${s.est_pu} PU)` : '')).join('\n');
   if(!confirm(tf('ov_prep_confirm', {list, pu: plan.total_pu}))) return;
   btn.disabled = true;
   box.innerHTML = `<div style="margin-top:8px;border:1px solid var(--line);border-radius:8px;padding:8px 10px;font-size:12px">
     <b>${esc(t('ov_prep_h'))}</b>
     ${plan.steps.map(s => `<div id="ovStep_${id}_${s.step}" style="margin-top:4px">
-      ${s.run ? '⏳' : '–'} ${esc(t('ov_step_' + s.step))}
-      <span class="hint">${s.run ? '' : esc(tf('ov_reason_' + s.reason, {ha: s.area_ha == null ? '' : s.area_ha.toFixed(1)}))}</span></div>`).join('')}
+      ${s.run ? '⏳' : '–'} ${esc(ovStepLabel(s))}
+      <span class="hint">${esc(ovStepReason(s))}</span></div>`).join('')}
   </div>`;
   for(const s of todo){
     const row = document.getElementById(`ovStep_${id}_${s.step}`);
-    row.innerHTML = `<span class="spinner" style="display:inline-block">⏳</span> <b>${esc(t('ov_step_' + s.step))}</b> <span class="hint">${esc(t('ov_prep_running'))}</span>`;
+    row.innerHTML = `<span class="spinner" style="display:inline-block">⏳</span> <b>${esc(ovStepLabel(s))}</b> <span class="hint">${esc(t('ov_prep_running'))}</span>`;
     let res;
     try{
       const r = await fetch(`/api/water/field/${id}/prepare_step`, {method: 'POST',
@@ -4847,11 +5159,52 @@ async function waterPrepareAll(id, btn){
       res = await r.json();
       if(!r.ok) res = {step: s.step, ok: false, error: typeof res.detail === 'string' ? res.detail : String(r.status)};
     }catch(e){ res = {step: s.step, ok: false, error: e.message}; }
-    row.innerHTML = `${esc(t('ov_step_' + s.step))}: ${ovStepResult(res)}`;
+    const note = ovStepReason(s);
+    row.innerHTML = `${esc(ovStepLabel(s))}: ${ovStepResult(res)}${note ? ` <span class="hint">· ${esc(note)}</span>` : ''}`;
   }
   btn.disabled = false;
   await waterOverviewLoad(id);
   loadWaterTriageQueue();
+}
+
+// Czy satelity widzą nawodnienia z dziennika (irrigation_detect.py).
+function ovIrrCell(sg){
+  const tip = sg.status === 'n_a' ? t('ov_irr_na_' + sg.reason) + (sg.ndvi != null ? ` (NDVI ${sg.ndvi})` : '')
+    : sg.status === 'no_data' ? t('ov_irr_nodata')
+    : tf('ov_irr_tip', {b: sg.before, a: sg.after, db: ovFmtDate(sg.date_before), da: ovFmtDate(sg.date_after)})
+      + (sg.rain_mm ? ' · ' + tf('ov_irr_rain', {mm: sg.rain_mm}) : '');
+  const [sym, col] = {seen: ['✓', '#2E7D32'], not_seen: ['✗', '#B3261E'], n_a: ['łan', '#999'], no_data: ['–', '#999']}[sg.status] || ['–', '#999'];
+  const label = sg.status === 'n_a' ? (sg.reason === 'dense_canopy' ? t('ov_irr_dense') : t('ov_irr_low')) : sym;
+  return `<td style="text-align:center;color:${col};font-weight:${sg.status === 'seen' || sg.status === 'not_seen' ? 600 : 400}" title="${esc(tip)}">${esc(label)}</td>`;
+}
+
+function ovIrrCheck(ic){
+  if(!ic || !ic.summary || (!ic.summary.total && !(ic.unlogged || []).length)) return '';
+  const sm = ic.summary;
+  const head = sm.total ? tf('ov_irr_h', {s: sm.seen, n: sm.total, x: sm.not_seen, z: sm.no_data}) : t('ov_irr_h_none');
+  const rows = (ic.events || []).map(r => `<tr>
+      <td>${esc(ovFmtDate(r.date))}</td><td style="text-align:center">${r.mm == null ? '—' : Math.round(r.mm)}</td>
+      ${['optram', 'vv', 'tsi', 'ndmi'].map(k => ovIrrCell(r.signals[k])).join('')}
+      <td style="text-align:center">${r.rain_confound ? '🌧 ' + Math.round(r.rain_mm) : ''}</td></tr>`).join('');
+  const unl = (ic.unlogged || []).map(c => `<li>${esc(tf('ov_irr_unlogged', {a: ovFmtDate(c.from), b: ovFmtDate(c.to),
+      s: c.signals.map(x => t('ov_irr_sigg_' + x)).join(' + ')}))}</li>`).join('');
+  return `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:12.5px;font-weight:600">🛰 ${esc(head)}</summary>
+    ${rows ? `<table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:6px">
+      <tr style="color:var(--muted)"><th style="text-align:left;font-weight:500">${esc(t('w_th_date'))}</th><th>mm</th>
+        <th>${esc(t('ov_irr_sig_optram'))}</th><th>${esc(t('ov_irr_sig_vv'))}</th><th>${esc(t('ov_irr_sig_tsi'))}</th><th>${esc(t('ov_irr_sig_ndmi'))}</th><th>${esc(t('ov_irr_th_rain'))}</th></tr>
+      ${rows}</table>` : ''}
+    ${unl ? `<div style="font-size:12px;margin-top:6px"><b>${esc(t('ov_irr_unlogged_h'))}</b><ul style="margin:2px 0 0 16px;padding:0">${unl}</ul></div>` : ''}
+    <div class="hint" style="margin-top:4px;font-size:11px">${esc(t('ov_irr_note'))}</div></details>`;
+}
+
+// ETa z termiki (water_overview.thermal_eta) — linia w karcie „Temperatura łanu”.
+function ovEtaLine(eta){
+  const se = eta && eta.season;
+  if(!se) return '';
+  const v = se.verdict ? ' ' + t('ov_eta_' + se.verdict) : '';
+  const approx = eta.approx ? ' ' + t('ov_eta_approx') : '';
+  return `<div style="font-size:11.5px;margin-top:4px;color:#333">${esc(tf('ov_eta_line', {from: ovFmtDate(se.from), to: ovFmtDate(se.to),
+    eta: se.eta_mm, model: se.model_mm, pct: se.pct == null ? '—' : (se.pct > 300 ? '>300' : se.pct)}) + v + approx)}</div>`;
 }
 
 function renderOverview(id, d){
@@ -4878,6 +5231,7 @@ function renderOverview(id, d){
         <span style="font-size:10.5px;padding:1px 7px;border-radius:9px;background:${sbg};color:${sfg};white-space:nowrap">${esc(t('ov_st_' + s.status))}</span>
       </div>
       <div style="font-size:12px;margin-top:4px">${esc(ovText(s.code, s.params))}</div>
+      ${s.key === 'canopy_temp' ? ovEtaLine(d.eta) : ''}
       <div class="hint" style="font-size:10.5px;margin-top:3px">${s.as_of ? esc(tf('ov_as_of', {d: ovFmtDate(s.as_of)})) + ' · ' : ''}${esc(t('ov_how_' + s.key))}</div>
     </div>`;
   }).join('');
@@ -4890,17 +5244,150 @@ function renderOverview(id, d){
     </div>
     <div style="padding:10px 12px">
       <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">${srcCards}</div>
-      <div style="font-size:12.5px;font-weight:600;margin-top:12px">${esc(t('ov_chart_h'))}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px;flex-wrap:wrap">
+        <div style="font-size:12.5px;font-weight:600">${esc(t('ov_chart_h'))}</div>
+        <div style="display:flex;gap:4px">
+          <button type="button" id="ovRangeAll_${id}" class="secondary" style="font-size:11px;padding:3px 8px" onclick="ovSetRange(${id}, 'all')">${esc(t('ov_range_all'))}</button>
+          <button type="button" id="ovRange3m_${id}" class="secondary" style="font-size:11px;padding:3px 8px" onclick="ovSetRange(${id}, '3m')">${esc(t('ov_range_3m'))}</button>
+          <button type="button" id="ovRangePick_${id}" class="secondary" style="font-size:11px;padding:3px 8px" title="${esc(t('ov_range_pick_hint'))}" onclick="ovSetRange(${id}, 'pick')">${esc(t('ov_range_pick'))}</button>
+        </div>
+      </div>
       <div style="height:340px;margin-top:4px"><canvas id="ovChart_${id}"></canvas></div>
       ${ovEstimateNote(d.timeline)}
+      ${ovIrrCheck(d.irrigation_check)}
       <details style="margin-top:4px"><summary class="hint" style="cursor:pointer">${esc(t('ov_read_h'))}</summary>
         <ul class="hint" style="margin:4px 0 0 16px;padding:0">
-          ${['soil', 'estimate', 'check', 'threshold', 'topsoil', 'cooling', 'green', 'bars', 'alarms', 'bands'].map(k => `<li>${esc(t('ov_read_' + k))}</li>`).join('')}
+          ${['soil', 'estimate', 'check', 'threshold', 'topsoil', 'cooling', 'green', 'green_evi2', 'chloro', 'leafw', 'bars', 'alarms', 'bands'].map(k => `<li>${esc(t('ov_read_' + k))}</li>`).join('')}
         </ul></details>
       ${d.balance_error ? `<div class="hint" style="margin-top:4px">${esc(t('ov_balance_err'))}</div>` : ''}
       <div class="hint" style="margin-top:4px;font-size:10.5px">${esc(trServer(d.calibration_status || ''))}</div>
     </div></div>`;
+  overviewData[id] = d;
+  ovPaintRange(id);
   drawOverviewChart(id, d);
+}
+
+const overviewRange = {};
+const overviewData = {};
+const overviewPick = {};
+
+function ovSetRange(id, range){
+  overviewRange[id] = range;
+  if(range === 'pick') overviewPick[id] = null;
+  ovPaintRange(id);
+  if(overviewData[id]) drawOverviewChart(id, overviewData[id]);
+}
+
+function ovPaintRange(id){
+  const range = overviewRange[id] || 'all';
+  [['all', 'ovRangeAll_'], ['3m', 'ovRange3m_'], ['pick', 'ovRangePick_']].forEach(([k, prefix]) => {
+    const el = document.getElementById(prefix + id);
+    if(!el) return;
+    const on = range === k;
+    el.style.background = on ? '#1E6FB0' : '';
+    el.style.color = on ? '#fff' : '';
+    el.style.borderColor = on ? '#1E6FB0' : '';
+  });
+  const pickBtn = document.getElementById('ovRangePick_' + id);
+  if(pickBtn){
+    const p = overviewPick[id];
+    pickBtn.textContent = (range === 'pick' && p) ? (ovFmtDate(p.from) + '–' + ovFmtDate(p.to)) : t('ov_range_pick');
+  }
+}
+
+function ovMonthsAgo(iso, months){
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  const dt = new Date(y, m - 1 - months, d);
+  const p = n => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${p(dt.getMonth() + 1)}-${p(dt.getDate())}`;
+}
+
+function ovSlice(tl, keep){
+  const cut = arr => (arr || []).filter(p => keep(String(p.date || '')));
+  return {...tl, soil: cut(tl.soil), rain: cut(tl.rain), irrigation: cut(tl.irrigation),
+    greenness: cut(tl.greenness), greenness_evi2: cut(tl.greenness_evi2), chlorophyll: cut(tl.chlorophyll), leaf_water: cut(tl.leaf_water), topsoil: cut(tl.topsoil), canopy_cooling: cut(tl.canopy_cooling),
+    alarms: cut(tl.alarms), soil_checks: cut(tl.soil_checks)};
+}
+
+function ovWindow(tl, asOf, range, pick){
+  if(range === '3m' && asOf){
+    const from = ovMonthsAgo(asOf, 3);
+    return ovSlice(tl, d => d >= from);
+  }
+  if(range === 'pick' && pick && pick.from && pick.to){
+    const a = pick.from < pick.to ? pick.from : pick.to;
+    const b = pick.from < pick.to ? pick.to : pick.from;
+    return ovSlice(tl, d => d >= a && d <= b);
+  }
+  return tl;
+}
+
+function ovPickPlugin(id){
+  return {id: 'ovPickDrag_' + id,
+    afterInit(chart){
+      const canvas = chart.canvas;
+      let startX = null;
+      const pos = ev => {
+        const r = canvas.getBoundingClientRect();
+        return {x: ev.clientX - r.left, y: ev.clientY - r.top};
+      };
+      const down = ev => {
+        if(ev.button !== 0) return;
+        const p = pos(ev);
+        const a = chart.chartArea;
+        if(!a || p.x < a.left || p.x > a.right || p.y < a.top || p.y > a.bottom) return;
+        startX = p.x;
+        chart.$pickX = p.x;
+        chart.$pickX2 = p.x;
+        try{ canvas.setPointerCapture(ev.pointerId); }catch(e){}
+      };
+      const move = ev => {
+        if(startX == null) return;
+        chart.$pickX2 = pos(ev).x;
+        chart.draw();
+      };
+      const up = ev => {
+        if(startX == null) return;
+        const x2 = pos(ev).x;
+        const x1 = startX;
+        startX = null;
+        chart.$pickX = chart.$pickX2 = null;
+        const labels = chart.data.labels || [];
+        const scale = chart.scales.x;
+        if(!labels.length || !scale) return;
+        const clamp = v => Math.max(0, Math.min(labels.length - 1, Math.round(Number(v))));
+        let i1 = clamp(scale.getValueForPixel(x1));
+        let i2 = clamp(scale.getValueForPixel(x2));
+        if(!Number.isFinite(i1) || !Number.isFinite(i2) || i1 === i2){ chart.draw(); return; }
+        if(i1 > i2){ const s = i1; i1 = i2; i2 = s; }
+        overviewPick[id] = {from: labels[i1], to: labels[i2]};
+        ovPaintRange(id);
+        if(overviewData[id]) drawOverviewChart(id, overviewData[id]);
+      };
+      canvas.addEventListener('pointerdown', down);
+      window.addEventListener('pointermove', move);
+      window.addEventListener('pointerup', up);
+      chart.$pickOff = () => {
+        canvas.removeEventListener('pointerdown', down);
+        window.removeEventListener('pointermove', move);
+        window.removeEventListener('pointerup', up);
+      };
+    },
+    beforeDestroy(chart){ if(chart.$pickOff) chart.$pickOff(); },
+    afterDatasetsDraw(chart){
+      if(chart.$pickX == null || chart.$pickX2 == null) return;
+      const {ctx, chartArea: a} = chart;
+      const x = Math.min(chart.$pickX, chart.$pickX2);
+      const w = Math.abs(chart.$pickX2 - chart.$pickX);
+      ctx.save();
+      ctx.fillStyle = 'rgba(30,111,176,0.18)';
+      ctx.strokeStyle = '#1E6FB0';
+      ctx.lineWidth = 1;
+      ctx.fillRect(x, a.top, w, a.bottom - a.top);
+      ctx.strokeRect(x, a.top, w, a.bottom - a.top);
+      ctx.restore();
+    }
+  };
 }
 
 /* Skąd wziął się start krzywej wody w glebie i do kiedy jest szacunkiem. */
@@ -4917,9 +5404,12 @@ function ovEstimateNote(tl){
 function drawOverviewChart(id, d){
   const cv = document.getElementById(`ovChart_${id}`);
   if(!cv) return;
-  const tl = d.timeline;
+  const range = overviewRange[id] || 'all';
+  const precise = range === '3m' || (range === 'pick' && overviewPick[id]);
+  const tl = ovWindow(d.timeline, d.as_of, range, overviewPick[id]);
+  cv.style.cursor = range === 'pick' ? 'crosshair' : '';
   const all = new Set();
-  ['soil', 'rain', 'irrigation', 'greenness', 'topsoil', 'canopy_cooling', 'alarms']
+  ['soil', 'rain', 'irrigation', 'greenness', 'greenness_evi2', 'chlorophyll', 'leaf_water', 'topsoil', 'canopy_cooling', 'alarms']
     .forEach(k => (tl[k] || []).forEach(p => all.add(p.date)));
   const labels = [...all].sort();
   if(!labels.length){ cv.parentElement.innerHTML = `<p class="hint">${esc(t('ov_chart_empty'))}</p>`; return; }
@@ -4969,9 +5459,18 @@ function drawOverviewChart(id, d){
   if((tl.greenness || []).length)
     ds.push({label: t('ov_l_green'), data: tl.greenness.map(p => ({x: p.date, y: p.v})), yAxisID: 'y',
       borderColor: 'rgba(46,125,50,0.55)', borderWidth: 1.2, pointRadius: 1.5, spanGaps: true, tension: 0.2, order: 2});
+  if((tl.greenness_evi2 || []).length)
+    ds.push({label: t('ov_l_green_evi2'), data: tl.greenness_evi2.map(p => ({x: p.date, y: p.v})), yAxisID: 'y',
+      borderColor: '#1B5E20', borderDash: [4, 3], borderWidth: 1.4, pointRadius: 1.5, spanGaps: true, tension: 0.2, order: 2});
+  if((tl.chlorophyll || []).length)
+    ds.push({label: t('ov_l_chloro'), data: tl.chlorophyll.map(p => ({x: p.date, y: p.v, ci: p.cire})), yAxisID: 'y',
+      borderColor: '#7B3FA0', borderWidth: 1.4, pointRadius: 1.5, spanGaps: true, tension: 0.2, order: 2});
+  if((tl.leaf_water || []).length)
+    ds.push({label: t('ov_l_leafw'), data: tl.leaf_water.map(p => ({x: p.date, y: p.v, nd: p.ndmi})), yAxisID: 'y',
+      borderColor: '#0E8C8C', borderWidth: 1.4, pointRadius: 1.5, spanGaps: true, tension: 0.2, order: 2});
   if((tl.rain || []).length)
     ds.push({label: t('ov_l_rain'), type: 'bar', data: tl.rain.map(p => ({x: p.date, y: p.mm})), yAxisID: 'y2',
-      backgroundColor: 'rgba(90,160,220,0.55)', barThickness: 3, order: 5});
+      backgroundColor: 'rgba(90,160,220,0.55)', barThickness: precise ? 6 : 3, order: 5});
   if((tl.irrigation || []).length)
     ds.push({label: t('ov_l_irr'), type: 'bar', data: tl.irrigation.map(p => ({x: p.date, y: p.mm == null ? 10 : p.mm})),
       yAxisID: 'y2', backgroundColor: 'rgba(20,70,140,0.85)', barThickness: 4, order: 5});
@@ -4979,9 +5478,13 @@ function drawOverviewChart(id, d){
     ds.push({label: t('ov_l_alarm'), type: 'line', showLine: false, data: tl.alarms.map(a => ({x: a.date, y: 97, a})),
       yAxisID: 'y', pointStyle: 'triangle', rotation: 180, pointRadius: 7,
       backgroundColor: tl.alarms.map(a => a.triage === 'confirmed' ? '#B3261E' : '#E3A21A'), order: 0});
-  if(overviewCharts[id]){ try{ overviewCharts[id].destroy(); }catch(e){} }
+  if(overviewCharts[id]){
+    try{ if(overviewCharts[id].$pickOff) overviewCharts[id].$pickOff(); }catch(e){}
+    try{ overviewCharts[id].destroy(); }catch(e){}
+  }
+  const plugins = range === 'pick' ? [bands, ovPickPlugin(id)] : [bands];
   overviewCharts[id] = new Chart(cv, {
-    type: 'line', data: {labels, datasets: ds}, plugins: [bands],
+    type: 'line', data: {labels, datasets: ds}, plugins,
     options: {responsive: true, maintainAspectRatio: false, animation: false,
       interaction: {mode: 'nearest', intersect: false},
       plugins: {legend: {labels: {boxWidth: 10, font: {size: 10}}},
@@ -4991,14 +5494,17 @@ function drawOverviewChart(id, d){
           if(r.th){
             const v = Math.round(r.th.v), f = x => x == null ? '—' : Math.round(x);
             const verdict = v >= 75 ? t('ov_cool_yes') : (v >= 50 ? t('ov_cool_mid') : t('ov_cool_no'));
+            const ep = ((d.eta || {}).points || []).find(p => p.date === r.x);
             return [tf('ov_cool_tip1', {f: f(r.th.t_field), c: f(r.th.t_cold), h: f(r.th.t_hot)}),
-                    tf('ov_cool_tip2', {v, verdict})];
+                    tf('ov_cool_tip2', {v, verdict})].concat(ep ? [tf('ov_eta_tip', {eta: ep.eta_mm, model: ep.model_mm})] : []);
           }
           if(c.dataset.yAxisID === 'y2') return `${c.dataset.label}: ${Math.round(c.parsed.y)} mm`;
           if(r.chk) return tf('ov_check_tip', {v: Math.round(c.parsed.y)});
+          if(r.nd != null) return tf('ov_leafw_tip', {v: Math.round(c.parsed.y), nd: r.nd.toFixed(2)});
+          if(r.ci != null) return tf('ov_chloro_tip', {v: Math.round(c.parsed.y), ci: r.ci.toFixed(2)});
           return `${c.dataset.label}: ${Math.round(c.parsed.y)}%${r.f ? ' (' + t('ov_forecast') + ')' : (r.e ? ' (' + t('ov_estimate') + ')' : '')}`;
         }}}},
-      scales: {x: {ticks: {maxTicksLimit: 8, font: {size: 9}, callback(v){ return ovFmtDate(labels[v]); }}},
+      scales: {x: {ticks: {maxTicksLimit: precise ? 14 : 8, font: {size: 9}, callback(v){ return ovFmtDate(labels[v]); }}},
                y: {min: 0, max: 118, title: {display: true, text: t('ov_axis_y')},
                    afterBuildTicks(scale){ scale.ticks = scale.ticks.filter(t => t.value <= 100); },
                    ticks: {stepSize: 10, autoSkip: false}},
@@ -5270,6 +5776,7 @@ async function waterThermalFetch(id, btn){
     const d = await r.json();
     if(!r.ok) throw new Error(trServer(String(d.detail || r.status)));
     renderThermal(id, d);
+    waterOverviewLoad(id);
   }catch(e){
     const out = document.getElementById(`thOut_${id}`);
     if(out) out.innerHTML = `<span style="color:#B3261E">${esc(t('cs_error'))}: ${esc(e.message)}</span>`;
@@ -5281,6 +5788,7 @@ async function waterThermalDelete(id){
   await fetch(`/api/water/field/${id}/thermal`, {method:'DELETE'});
   const el = document.getElementById(`waterThermal_${id}`); el.dataset.open = '';
   waterThermalToggle(id);
+  waterOverviewLoad(id);
 }
 
 /* --- Bilans wodny FAO-56 (water_balance.py) — sugestia, nie automat. --- */
@@ -5398,7 +5906,7 @@ function renderSoilEditor(fieldId, sw){
       <label style="font-size:11.5px">${esc(t('sw_root_lbl'))}<input type="number" min="10" max="300" step="5" id="swRoot_${fieldId}"
         value="${sw.root_limit_cm || ''}" placeholder="${esc(t('sw_root_ph'))}"></label>
     </div>
-    ${renderSaltEditor(fieldId, sw.salinity)}
+    ${renderSaltEditor(fieldId, sw.salinity, sw)}
     <label style="font-size:11.5px;display:block;margin-top:6px">${esc(t('sw_taw_lbl'))}
       <input type="number" min="10" max="400" step="5" id="swTaw_${fieldId}" value="${sw.manual_taw_mm || ''}"
         placeholder="${esc(t('sw_taw_ph'))}"></label>
@@ -5414,11 +5922,51 @@ function renderSoilEditor(fieldId, sw){
   </div>`;
 }
 
-function renderSaltEditor(fieldId, sa){
+// Podejrzenie zasolenia z wielolecia Sentinel-2 (salinity_scan.py).
+const SA_SCAN_COLORS = {0: '#D6E4C7', 1: '#F4D03F', 2: '#E67E22', 3: '#C0392B'};
+function renderSalinityScan(fieldId, sw){
+  const sc = sw && sw.salinity_scan;
+  const btn = `<button class="secondary" style="font-size:11.5px;margin-top:6px" type="button" onclick="waterSalinityScan(${fieldId}, this, ${sw ? sw.salinity_scan_pu : 6})">
+    🛰 ${esc(tf(sc ? 'ss_btn_again' : 'ss_btn', {pu: sw ? sw.salinity_scan_pu : 6}))}</button><div class="error" id="ssErr_${fieldId}" style="margin-top:4px"></div>`;
+  if(!sc) return `<div style="margin-top:8px"><div class="hint" style="font-size:11px">${esc(t('ss_intro'))}</div>${btn}</div>`;
+  const yrs = sc.years_vigor || [];
+  const span = yrs.length ? `${yrs[0]}–${yrs[yrs.length - 1]}` : '—';
+  if(sc.status !== 'ok')
+    return `<div style="margin-top:8px;font-size:12px">🛰 ${esc(tf('ss_too_few', {n: yrs.length, y: span}))}</div>${btn}`;
+  const sh = sc.share_pct || {};
+  const legend = [3, 2, 1, 0].map(k => `<span style="display:inline-flex;align-items:center;gap:3px;margin-right:8px">
+      <span style="width:10px;height:10px;background:${SA_SCAN_COLORS[k]};display:inline-block;border:1px solid #999"></span>${esc(t('ss_cls_' + k))} ${Math.round(sh[k] || 0)}%</span>`).join('')
+    + `<span style="display:inline-flex;align-items:center;gap:3px"><span style="width:10px;height:10px;background:#AAAAAA;display:inline-block;border:1px solid #999"></span>${esc(t('ss_edge'))}</span>`;
+  const pts = !(sc.points || []).some(p => p.kind === 'suspect') ? '' : (sc.points || []).map(p => `<li>${esc(p.kind === 'control' ? t('ss_pt_control') : tf('ss_pt_suspect', {n: p.n}))}:
+      <a href="https://www.google.com/maps?q=${p.lat},${p.lon}" target="_blank" rel="noopener">${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</a></li>`).join('');
+  return `<div style="margin-top:8px">
+    <div style="font-size:12px;font-weight:600">🛰 ${esc(tf('ss_head', {p: Math.round(sc.suspect_pct), y: span, n: yrs.length}))}</div>
+    <img src="/api/water/field/${fieldId}/salinity_scan.png?t=${encodeURIComponent(sc.saved_at || '')}" alt=""
+      style="max-width:100%;margin-top:4px;image-rendering:pixelated;border:1px solid var(--line);border-radius:4px">
+    <div style="font-size:11px;margin-top:3px">${legend}</div>
+    ${pts ? `<div style="font-size:11.5px;margin-top:4px">${esc(t('ss_pts_h'))}<ul style="margin:2px 0 0 16px;padding:0">${pts}</ul></div>` : ''}
+    <div class="hint" style="font-size:11px;margin-top:3px">${esc(t('ss_note'))}</div>
+    ${btn}</div>`;
+}
+
+async function waterSalinityScan(fieldId, btn, pu){
+  if(!confirm(tf('ss_confirm', {pu}))) return;
+  const err = document.getElementById(`ssErr_${fieldId}`);
+  btn.disabled = true; const label = btn.textContent; btn.textContent = '⏳ ' + t('ss_running');
+  try{
+    const r = await fetch(`/api/water/field/${fieldId}/salinity_scan`, {method: 'POST'});
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.detail || r.status);
+    loadWaterDetails(fieldId);
+  }catch(e){ err.textContent = trServer(e.message); err.style.display = 'block'; btn.disabled = false; btn.textContent = label; }
+}
+
+function renderSaltEditor(fieldId, sa, sw){
   if(!sa) return '';
   // płytkie wody gruntowe są już w zdaniu powyżej — tu tylko zgłoszenia rolnika
   const hints = (sa.hints || []).filter(h => h !== 'gw_shallow').map(h => `<div class="hint" style="margin-top:3px;font-size:11.5px;color:#A87716">⚠ ${esc(tf('sa_hint_' + h, {
-      d: (sa.farmer_report_at || '').slice(0, 10), m3: sa.farmer_leaching_m3 || '?', m: sa.gw_depth_m}))}</div>`).join('');
+      d: (sa.farmer_report_at || '').slice(0, 10), m3: sa.farmer_leaching_m3 || '?', m: sa.gw_depth_m,
+      p: sa.sat_suspect_pct == null ? '' : Math.round(sa.sat_suspect_pct)}))}</div>`).join('');
   const clsOpts = [`<option value="">${esc(t('sa_cls_unknown'))}</option>`].concat(SA_CLASSES.map(k =>
     `<option value="${k}" ${sa.salinity_class === k ? 'selected' : ''}>${esc(t('sa_cls_' + k))}</option>`)).join('');
   const mOpts = ['ec_1_5', 'ece', 'ec_water'].map(k =>
@@ -5437,6 +5985,7 @@ function renderSaltEditor(fieldId, sa){
       <label style="font-size:11.5px">${esc(t('sa_m_lbl'))}<select id="saM_${fieldId}">${mOpts}</select></label>
     </div>
     <div class="hint" style="margin-top:3px;font-size:11px">${esc(t('sa_ec_hint'))}</div>
+    ${renderSalinityScan(fieldId, sw)}
   </div>`;
 }
 
@@ -5660,6 +6209,13 @@ async function waterRainAdd(fieldId){
   }catch(e){ err.textContent = e.message; err.style.display = 'block'; }
 }
 
+async function waterIrrigationDelete(fieldId, eventId, dateStr){
+  if(!confirm(tf('w_ev_delete_confirm', {d: dateStr}))) return;
+  await fetch(`/api/water/irrigation/${eventId}`, {method:'DELETE'});
+  loadWaterDetails(fieldId);
+  if(document.getElementById(`waterOverview_${fieldId}`)?.dataset.open === '1') waterOverviewLoad(fieldId);
+}
+
 async function waterRainDelete(fieldId, readingId){
   await fetch(`/api/water/rain/${readingId}`, {method:'DELETE'});
   loadWaterDetails(fieldId);
@@ -5765,11 +6321,13 @@ function renderWaterDetails(fieldId, events, observations, plans){
       <td style="text-align:center">${o.precip_mm != null ? o.precip_mm.toFixed(1) : '—'}${o.dry_spell ? ' 🌵' : ''}</td>
     </tr>`).join('');
 
-  const evRows = (events || []).slice(-8).reverse().map(e => `
+  const evRows = (events || []).slice(-20).reverse().map(e => `
     <tr>
       <td>${esc(e.event_date)}</td>
       <td style="text-align:center">${esc(trMethod(e.method))}</td>
       <td style="text-align:center">${e.amount_or_duration != null ? e.amount_or_duration : '—'} ${esc(e.amount_unit || '')}</td>
+      <td style="text-align:right"><button class="secondary" style="font-size:10px;padding:2px 6px" type="button"
+        title="${esc(t('w_ev_delete'))}" onclick="waterIrrigationDelete(${fieldId},${e.id},'${esc(e.event_date)}')">✕</button></td>
     </tr>`).join('');
 
   return `
@@ -5812,8 +6370,8 @@ function renderWaterDetails(fieldId, events, observations, plans){
         onclick="waterIrrigationAdd(${fieldId})">${esc(t('w_add_entry'))}</button>
       <div class="error" id="waterEvErr_${fieldId}" style="margin-top:6px"></div>
       <table style="width:100%;font-size:11.5px;border-collapse:collapse;margin-top:8px">
-        <tr style="color:var(--muted)"><th style="text-align:left;font-weight:500">${esc(t('w_th_date'))}</th><th>${esc(t('w_th_method'))}</th><th>${esc(t('w_th_amount'))}</th></tr>
-        ${evRows || '<tr><td colspan="3" style="text-align:center;color:var(--muted);padding:8px 0">'+esc(t('w_no_entries'))+'</td></tr>'}
+        <tr style="color:var(--muted)"><th style="text-align:left;font-weight:500">${esc(t('w_th_date'))}</th><th>${esc(t('w_th_method'))}</th><th>${esc(t('w_th_amount'))}</th><th></th></tr>
+        ${evRows || '<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:8px 0">'+esc(t('w_no_entries'))+'</td></tr>'}
       </table>
     </div>
     <div style="margin-top:14px">
@@ -6270,6 +6828,25 @@ const TRANSLATIONS = {
     y_summary: 'Plon zgłoszony {rep} t/ha (średnia mapy {mean}) · 10–90% pola: {p10}–{p90} t/ha · zmienność (CV) {cv}% · scen na piksel: {sc} · {ha} ha',
     y_zone: 'Strefa (względem średniej)', y_area: 'Powierzchnia', y_share: 'Udział', y_mean: 'Plon w strefie', y_zones_geojson: 'Strefy (GeoJSON)',
     y_caveat: 'MVI zwalidowano na kukurydzy i soi w USA (Landsat). Dla polskich upraw traktuj mapę jako względną (gdzie w polu lepiej / gorzej) do czasu porównania z mapą plonu z kombajnu.',
+    ma_h: 'Strefy z wielolecia + nawożenie zmienną dawką',
+    ma_intro: 'Podaj płodozmian i plony z kilku lat (np. 5) — dla każdego roku liczę względną mapę plonu w oknie sezonu danej uprawy, a strefy wyznaczam ze średniej wszystkich lat. Opcjonalnie podaj średnią dawkę nawozu — rozpiszę ją na strefy i przygotuję plik dla siewnika/rozsiewacza oraz raport PDF.',
+    ma_years_h: 'Płodozmian i plony', ma_add_year: '+ dodaj rok', ma_yield_col: 'Plon [t/ha]',
+    ma_fert_h: 'Nawożenie (opcjonalnie — można też ustawić po policzeniu)', ma_fert_name: 'Nawóz', ma_fert_name_ph: 'np. NPK 6-20-30',
+    ma_dose: 'Dawka średnia [kg/ha]', ma_strategy: 'Strategia',
+    ma_strat_pot: 'pod potencjał (więcej w strefach mocnych)', ma_strat_wyr: 'wyrównawcza (więcej w strefach słabych)',
+    ma_dose_min: 'Dawka min [kg/ha]', ma_dose_max: 'Dawka max [kg/ha]',
+    ma_btn: 'Policz strefy z wielolecia', ma_running: 'Liczę {n} lat (jedno zapytanie Sentinel-2 na rok)...',
+    ma_err_years: 'Uzupełnij co najmniej 2 lata (rok, uprawa i plon).',
+    ma_list_h: 'Zapisane analizy wieloletnie', ma_none: 'Brak analiz — policz pierwszą.',
+    ma_years_col: 'Lata', ma_show: 'Pokaż', ma_pdf: 'Raport PDF', ma_shp: 'Plik siewnika (SHP)',
+    ma_soil: 'Wgraj próby glebowe (CSV)', ma_soil_ok: 'Wczytano {n} prób glebowych.',
+    ma_running_badge: 'liczę…', ma_failed: 'błąd', ma_confirm_del: 'Usunąć tę analizę (razem z plikami)?',
+    ma_summary: 'Lata w analizie: {ok}/{n} · zmienność (CV) {cv}% · piksele stabilne między latami: {stab}% · {ha} ha',
+    ma_rel: 'Plon względny', ma_stab: 'CV międzyroczny', ma_dose_col: 'Dawka', ma_total: 'Razem', ma_humus: 'Próchnica',
+    ma_apply_fert: 'Przelicz dawki', ma_fert_summary: '— średnia po zaokrągleniu {eff} kg/ha, łącznie {tot} kg na {ha} ha.',
+    ma_soil_h: 'Próby glebowe — średnie per strefa (mg/100 g gleby)', ma_skipped: 'pominięty',
+    ma_dawki_geojson: 'Dawki (GeoJSON)',
+    ma_caveat: 'Dawki wyliczone z rozkładu potencjału plonowania — nie korygują automatycznie o zasobność gleby; tabela prób glebowych służy do ręcznej korekty przez agronoma. Plik SHP (WGS84, atrybut RATE w kg/ha) wgrywa się do terminala maszyny.',
     lang_btn:    '🌐 EN',
 
     // formularz pojedynczy
@@ -6505,6 +7082,25 @@ const TRANSLATIONS = {
     y_summary: 'Reported yield {rep} t/ha (map mean {mean}) · 10–90% of field: {p10}–{p90} t/ha · variability (CV) {cv}% · scenes per pixel: {sc} · {ha} ha',
     y_zone: 'Zone (vs mean)', y_area: 'Area', y_share: 'Share', y_mean: 'Yield in zone', y_zones_geojson: 'Zones (GeoJSON)',
     y_caveat: 'MVI was validated on maize and soybean in the USA (Landsat). For other crops treat the map as relative (better / worse parts of the field) until compared with a combine yield map.',
+    ma_h: 'Multi-year zones + variable-rate fertilization',
+    ma_intro: 'Enter the rotation and yields from several years (e.g. 5) — for each year I compute a relative yield map in that crop\'s season window, and derive zones from the average of all years. Optionally enter the average fertilizer dose — I will split it across zones and prepare a spreader/seeder file and a PDF report.',
+    ma_years_h: 'Rotation and yields', ma_add_year: '+ add year', ma_yield_col: 'Yield [t/ha]',
+    ma_fert_h: 'Fertilization (optional — can also be set after computing)', ma_fert_name: 'Fertilizer', ma_fert_name_ph: 'e.g. NPK 6-20-30',
+    ma_dose: 'Average dose [kg/ha]', ma_strategy: 'Strategy',
+    ma_strat_pot: 'by potential (more in strong zones)', ma_strat_wyr: 'compensatory (more in weak zones)',
+    ma_dose_min: 'Min dose [kg/ha]', ma_dose_max: 'Max dose [kg/ha]',
+    ma_btn: 'Compute multi-year zones', ma_running: 'Computing {n} years (one Sentinel-2 request per year)...',
+    ma_err_years: 'Fill in at least 2 years (year, crop and yield).',
+    ma_list_h: 'Saved multi-year analyses', ma_none: 'No analyses yet — compute the first one.',
+    ma_years_col: 'Years', ma_show: 'Show', ma_pdf: 'PDF report', ma_shp: 'Seeder file (SHP)',
+    ma_soil: 'Upload soil tests (CSV)', ma_soil_ok: 'Loaded {n} soil samples.',
+    ma_running_badge: 'computing…', ma_failed: 'error', ma_confirm_del: 'Delete this analysis (with files)?',
+    ma_summary: 'Years in analysis: {ok}/{n} · variability (CV) {cv}% · pixels stable across years: {stab}% · {ha} ha',
+    ma_rel: 'Relative yield', ma_stab: 'Inter-year CV', ma_dose_col: 'Dose', ma_total: 'Total', ma_humus: 'Humus',
+    ma_apply_fert: 'Recompute doses', ma_fert_summary: '— rounded average {eff} kg/ha, total {tot} kg over {ha} ha.',
+    ma_soil_h: 'Soil tests — zone averages (mg/100 g of soil)', ma_skipped: 'skipped',
+    ma_dawki_geojson: 'Rates (GeoJSON)',
+    ma_caveat: 'Doses are derived from the yield-potential distribution only — they are not automatically corrected for soil nutrient status; the soil test table is for manual adjustment by the agronomist. Upload the SHP file (WGS84, RATE attribute in kg/ha) to the machine terminal.',
     lang_btn:    '🌐 PL',
 
     card_data:        'Verification data',
@@ -6729,6 +7325,25 @@ const TRANSLATIONS = {
     y_summary: 'Resa dichiarata {rep} t/ha (media mappa {mean}) · 10–90% del campo: {p10}–{p90} t/ha · variabilità (CV) {cv}% · scene per pixel: {sc} · {ha} ha',
     y_zone: 'Zona (rispetto alla media)', y_area: 'Superficie', y_share: 'Quota', y_mean: 'Resa nella zona', y_zones_geojson: 'Zone (GeoJSON)',
     y_caveat: 'MVI è stato validato su mais e soia negli USA (Landsat). Per altre colture considera la mappa come relativa (zone migliori / peggiori) fino al confronto con una mappa di resa della mietitrebbia.',
+    ma_h: 'Zone pluriennali + concimazione a rateo variabile',
+    ma_intro: 'Inserisci la rotazione e le rese di più anni (es. 5) — per ogni anno calcolo una mappa di resa relativa nella finestra stagionale della coltura e ricavo le zone dalla media di tutti gli anni. Facoltativamente inserisci la dose media di concime — la ripartirò tra le zone e preparerò un file per lo spandiconcime/seminatrice e un report PDF.',
+    ma_years_h: 'Rotazione e rese', ma_add_year: '+ aggiungi anno', ma_yield_col: 'Resa [t/ha]',
+    ma_fert_h: 'Concimazione (facoltativa — impostabile anche dopo il calcolo)', ma_fert_name: 'Concime', ma_fert_name_ph: 'es. NPK 6-20-30',
+    ma_dose: 'Dose media [kg/ha]', ma_strategy: 'Strategia',
+    ma_strat_pot: 'secondo il potenziale (più nelle zone forti)', ma_strat_wyr: 'compensativa (più nelle zone deboli)',
+    ma_dose_min: 'Dose min [kg/ha]', ma_dose_max: 'Dose max [kg/ha]',
+    ma_btn: 'Calcola le zone pluriennali', ma_running: 'Calcolo {n} anni (una richiesta Sentinel-2 per anno)...',
+    ma_err_years: 'Compila almeno 2 anni (anno, coltura e resa).',
+    ma_list_h: 'Analisi pluriennali salvate', ma_none: 'Nessuna analisi — calcola la prima.',
+    ma_years_col: 'Anni', ma_show: 'Mostra', ma_pdf: 'Report PDF', ma_shp: 'File per seminatrice (SHP)',
+    ma_soil: 'Carica analisi del suolo (CSV)', ma_soil_ok: 'Caricati {n} campioni di suolo.',
+    ma_running_badge: 'calcolo…', ma_failed: 'errore', ma_confirm_del: 'Eliminare questa analisi (con i file)?',
+    ma_summary: 'Anni in analisi: {ok}/{n} · variabilità (CV) {cv}% · pixel stabili tra gli anni: {stab}% · {ha} ha',
+    ma_rel: 'Resa relativa', ma_stab: 'CV interannuale', ma_dose_col: 'Dose', ma_total: 'Totale', ma_humus: 'Humus',
+    ma_apply_fert: 'Ricalcola le dosi', ma_fert_summary: '— media arrotondata {eff} kg/ha, totale {tot} kg su {ha} ha.',
+    ma_soil_h: 'Analisi del suolo — medie per zona (mg/100 g di suolo)', ma_skipped: 'saltato',
+    ma_dawki_geojson: 'Dosi (GeoJSON)',
+    ma_caveat: 'Le dosi derivano solo dalla distribuzione del potenziale di resa — non vengono corrette automaticamente per la dotazione del suolo; la tabella delle analisi serve alla correzione manuale dell\'agronomo. Carica il file SHP (WGS84, attributo RATE in kg/ha) nel terminale della macchina.',
     lang_btn:    '🌐 PL',
 
     card_data:        'Dati di verifica',
@@ -7107,9 +7722,9 @@ const EXTRA_I18N = {
     op_btn: "Wilgotność (OPTRAM)", op_title: "Wilgotność wierzchniej warstwy gleby z satelity (OPTRAM)", op_intro: "OPTRAM ocenia wilgotność z tego, jak ciemna jest gleba i roślinność w krótkofalowej podczerwieni (Sentinel-2, pasmo B12): woda pochłania to światło. Piksele z regionu wokół pola z wielu dat tworzą na wykresie NDVI × STR trapez — dolna krawędź to stan najsuchszy, górna najwilgotniejszy przy danym pokryciu roślin. Położenie pola między krawędziami daje wilgotność względną W od 0 (sucho) do 1 (mokro).", op_caveats: "W jest względne, nie w % objętości. Dotyczy kilku górnych centymetrów, a przy zwartym łanie (NDVI > 0,6) raczej uwodnienia roślin. Trapez jest liczony dla regionu ~1,5 km wokół pola — po zmianie sezonu albo dużej zmianie upraw w okolicy warto skalibrować ponownie. To kontekst do werdyktu i bilansu wodnego, nie osobny alarm.", op_months: "ostatnie {n} mies.", op_calibrate: "Skalibruj trapez", op_recalibrate: "Kalibruj ponownie", op_calibrating: "Liczę… (do 2 min)", op_calib_cost: "jedno zapytanie Process API (do 60 scen) + jedno Statistical API", op_no_series: "Brak czystych obserwacji pola w okresie kalibracji.", op_pct: "{p}. percentyl wartości pola", op_cls_dry: "sucho", op_cls_mid: "umiarkowanie wilgotno", op_cls_wet: "wilgotno", op_dense: "Zwarty łan — wartość pokazuje raczej uwodnienie roślin niż gleby.", op_quality: "Jakość kalibracji", op_q_good: "dobra", op_q_limited: "ograniczona", op_q_poor: "niewiarygodna", op_calib_info: "okres {from} – {to}, {s} scen, {px} pikseli", op_era5: "Zgodność z wilgotnością gleby ERA5-Land 0–7 cm: r = {r} ({n} wspólnych dat).", op_era5_good: "— dobra, kalibracja wiarygodna.", op_era5_mid: "— umiarkowana.", op_era5_bad: "— słaba, traktuj W ostrożnie.", op_era5_none: "Za mało wspólnych dat z ERA5-Land do porównania (uruchom „Sprawdź teraz” albo powtórkę na historii).", op_chart_trap: "Trapez: piksele regionu, krawędzie sucha i mokra, pole (pomarańczowe)", op_chart_series: "Wilgotność W pola w czasie i ERA5-Land 0–7 cm", op_pixels: "piksele regionu", op_edge_dry: "krawędź sucha", op_edge_wet: "krawędź mokra", op_field: "pole", op_era5_label: "ERA5-Land 0–7 cm", op_refresh: "Dociągnij ostatnie 45 dni", op_delete: "Usuń kalibrację", op_delete_confirm: "Usunąć kalibrację OPTRAM i serię wilgotności tego pola?", op_how: "Jak to działa i ograniczenia",
     th_btn: "Termika (Landsat)", th_title: "Termika z Landsata 8/9 — stres wodny po temperaturze łanu", th_intro: "Roślina z dostępem do wody chłodzi się transpiracją; gdy wody brakuje, zamyka aparaty szparkowe i nagrzewa się — często kilka dni przed spadkiem NDVI/NDMI. Porównujemy temperaturę pola z najchłodniejszą gęstą roślinnością (dobrze uwodnioną) i najgorętszą gołą glebą w promieniu ~1,5 km na tej samej scenie. Indeks stresu termicznego TSI: 0 = pole tak chłodne jak najlepiej uwodniona roślinność, 1 = nagrzane jak sucha gleba.", th_caveats: "Copernicus Data Space udostępnia Landsata tylko w poziomie 1 (od 2021): temperatura powierzchni jest liczona w przybliżeniu (emisyjność z NDVI, bez korekcji atmosfery), więc stopnie °C traktuj orientacyjnie — wskaźnik TSI jest względny w obrębie sceny i na to niewrażliwy. Piksel termiczny ma 100 m: na polach poniżej ~3 ha wynik miesza się z otoczeniem. Nalot ok. 10:30–11:00, co ~8 dni (L8+L9), tylko bezchmurnie. Zimą i wczesną wiosną brak gęstej roślinności w okolicy = brak TSI.", th_fetch: "Pobierz termikę", th_fetch_again: "Pobierz ponownie", th_cost: "jedno zapytanie Process API (do 60 scen)", th_small: "Pole ma {ha} ha — piksel termiczny Landsata ma 100 m, wynik będzie mieszał się z otoczeniem.", th_cls_ok: "rośliny chłodzą się transpiracją", th_cls_mid: "możliwy początek stresu", th_cls_high: "prawdopodobny stres wodny albo słaba okrywa", th_no_ref: "Brak gęstej roślinności albo gołej gleby w okolicy na tej scenie — nie da się policzyć TSI.", th_latest: "Scena {d}: pole ≈ {t} °C · najchłodniejsza roślinność ≈ {c} °C · najgorętsza gleba ≈ {h} °C · NDVI pola {n}", th_spread: "Różnica temperatur w polu (p90−p10): {k} K — możliwe nierówne nawodnienie.", th_low_cover: "Słaba okrywa — temperatura pokazuje głównie glebę.", th_n: "Scen bez chmur nad polem: {n}", th_tsi: "TSI (stres termiczny)", th_t_field: "pole °C", th_t_cold: "roślinność chłodna °C", th_t_hot: "gleba gorąca °C", th_delete: "Usuń dane termiczne", th_delete_confirm: "Usunąć zapisane sceny termiczne tego pola?", th_source: "Landsat 8/9 (USGS/NASA) przez Copernicus Data Space",
     bc_h: "Biomasa i azot poplonu — kalibracja na próbkach z pola (CIred-edge)", bc_intro: "Obecny model biomasy pochodzi z literatury dla kukurydzy. CIred-edge (B07/B05 − 1) rośnie liniowo z chlorofilem i azotem w łanie i nie nasyca się przy bujnym poplonie — ale współczynników dla polskich mieszanek nie ma w literaturze. Wpisuj próbki z wizyt (ramki, ścięcie, ważenie): aplikacja dobierze najbliższą czystą scenę Sentinel-2, porówna modele i pozwoli zatwierdzić model na Twoich danych.", bc_proto_h: "Jak pobrać próbkę", bc_proto_1: "Termin: do 5 dni od bezchmurnego przelotu Sentinel-2 (najlepiej w dniu przelotu). Aplikacja sama znajdzie najbliższą czystą scenę.", bc_proto_2: "Na polu 4 ramki 0,25 m² (50×50 cm) w miejscach typowych dla pola, min. 20 m od brzegu; nie wybieraj najlepszych ani najgorszych miejsc.", bc_proto_3: "Ściąć całą biomasę nadziemną tuż przy ziemi, zważyć świeżą masę z każdej ramki (średnia w gramach).", bc_proto_4: "Sucha masa: wysuszyć podpróbkę w 60–65 °C do stałej masy (ok. 48 h) albo przyjąć % suchej masy z tabel dla gatunku; N — z analizy laboratoryjnej (% N w s.m.), opcjonalnie.", bc_proto_5: "Zbierz próbki z pól o różnej bujności — od słabych po bardzo bujne. Model można zatwierdzić od 8 próbek, wiarygodny jest od ok. 15.", bc_f_parcel: "Nr działki (ULDK)", bc_f_date: "Data próbki", bc_f_mix: "Mieszanka / gatunek", bc_f_frames: "Liczba ramek", bc_f_frame_m2: "Powierzchnia ramki (m²)", bc_f_fresh: "Świeża masa — średnio z ramki (g)", bc_f_dmpct: "Sucha masa (% świeżej)", bc_f_dm: "albo od razu: sucha masa (t/ha)", bc_f_npct: "N w suchej masie (%, opcjonalnie)", bc_add: "Dodaj próbkę", bc_calc: "= {dm} t s.m./ha", bc_calc_n: "{n} kg N/ha", bc_missing: "Podaj nr działki, datę i masę (świeżą z % s.m. albo suchą t/ha).", bc_matching: "Szukam sceny Sentinel-2…", bc_added_ok: "Dodano. Scena {d}, CIre {c}.", bc_added_nomatch: "Dodano, ale bez czystej sceny w ±5 dniach — próbka nie wejdzie do dopasowania (spróbuj „Dopasuj scenę” później).", bc_empty: "Brak próbek.", bc_col_parcel: "Działka", bc_col_dm: "Sucha masa t/ha", bc_col_scene: "Scena S2", bc_rematch: "Dopasuj scenę", bc_rematch_fail: "błąd — spróbuj później", bc_delete_confirm: "Usunąć tę próbkę?", bc_active: "Model używany teraz:", bc_target_dm: "biomasa", bc_target_n: "pobranie N", bc_lit_model: "literaturowy (EVI+NDRE+RVI, kukurydza)", bc_clear: "Wróć do literaturowego", bc_clear_confirm: "Wycofać model skalibrowany? Szacunki wrócą do modelu literaturowego.", bc_fit_h: "Dopasowanie na {n} próbkach z dopasowaną sceną", bc_col_model: "Model", bc_rmse_cv: "błąd walidacji krzyżowej", bc_linear: "liniowy", bc_cmp_hint: "Błąd walidacji krzyżowej: każdą próbkę przewiduje model dopasowany do pozostałych — uczciwa miara błędu na nowym polu. Mniej = lepiej.", bc_apply_dm: "Zatwierdź model biomasy", bc_apply_n: "Zatwierdź model azotu", bc_apply_dm_confirm: "Zatwierdzić model biomasy z CIre? Od teraz szacunki biomasy (także zapisane w monitoringu) będą liczone z tego modelu.", bc_apply_n_confirm: "Zatwierdzić model pobrania N z CIre?", bc_applied: "Zatwierdzono. Przeliczono zapisanych obserwacji: {n}.", bc_samples: "próbki", bc_fit_line: "dopasowanie", bc_n_line: "N w biomasie: {lo}–{hi} kg/ha", bc_src_field: "model skalibrowany na próbkach z pola", bc_src_lit: "model literaturowy (bez kalibracji na poplonach)", bc_extrap: "CIre poza zakresem próbek — ekstrapolacja",
-    ov_loading: "Zbieram dane ze wszystkich źródeł…", ov_overall_good: "Wody nie brakuje", ov_overall_watch: "Do obserwacji — pierwszy sygnał niedoboru wody", ov_overall_possible: "Możliwy niedobór wody", ov_overall_confirmed: "Niedobór wody — potwierdzają to różne źródła", ov_overall_conflict: "Źródła się nie zgadzają — sprawdź dziennik nawodnień", ov_overall_no_data: "Za mało danych do oceny", ov_agree_ok: "Żadne z {of} dostępnych źródeł nie pokazuje niedoboru wody.", ov_agree_problem: "Niedobór wody pokazuje {n} z {of} dostępnych źródeł.", ov_what_now: "Co teraz:", ov_action_irrigate: "nawodnić do {date}, ok. {mm} mm ({m3} m³/ha).", ov_action_check_irrigation: "sprawdzić pole i instalację nawadniającą — rośliny sygnalizują brak wody.", ov_action_rainfed: "pole bez nawadniania — obserwować; rozważyć zabiegi ograniczające parowanie.", ov_action_none: "nic nie trzeba robić.", ov_action_watch: "obserwować — sprawdzić ponownie po kolejnym przelocie satelity.", ov_action_log_water: "jeśli było nawodnienie albo płukanie, którego nie ma w dzienniku — wpisz je, a bilans się wyrówna.", ov_conflict_unlogged_water: "Model bilansu liczy glebę jako suchą, ale satelita widzi ją wilgotną (OPTRAM {w}). Najczęściej to woda spoza dziennika: nawodnienie, płukanie albo opad, którego nie złapał model.", ov_conflict_not_water: "W glebie wody nie brakuje, a rośliny wyglądają źle — przyczyna może być inna niż susza (choroba, szkodniki, nawożenie, zbiór).", ov_src_soil: "Woda w glebie (bilans)", ov_src_plants: "Rośliny (Sentinel-2)", ov_src_topsoil: "Wierzchnia warstwa gleby (OPTRAM)", ov_src_weather: "Pogoda", ov_st_ok: "w porządku", ov_st_warn: "uwaga", ov_st_bad: "problem", ov_st_none: "brak oceny", ov_as_of: "dane z {d}", ov_how_soil: "opady, parowanie i nawodnienia z dziennika", ov_how_plants: "zieleń i wilgotność liści z satelity", ov_how_topsoil: "kilka górnych cm gleby z satelity", ov_how_canopy_temp: "rośliny z wodą są chłodniejsze", ov_how_weather: "prognoza 7 dni i ostatnie 30 dni", ov_soil_ok: "Zapas wody wystarcza ({left_pct}% pojemności); według prognozy wystarczy na {days} dni.", ov_soil_soon: "Zostało {left_pct}% wody; próg stresu {when} ({date}).", ov_soil_approach: "Zapas wody się kończy — zostało {left_pct}% pojemności.", ov_soil_stress: "Rośliny w stresie wodnym — zużyto {used} mm, próg to {raw} mm.", ov_soil_no_data: "Brak danych pogodowych do policzenia bilansu.", ov_plants_ok: "Łan zielony (NDVI {ndvi}), bez oznak przesychania.", ov_plants_low_cover: "Za mało roślin, by ocenić łan (NDVI {ndvi}) — np. po zbiorze lub przed wschodami.", ov_plants_no_data: "Brak świeżego, bezchmurnego zdjęcia satelitarnego.", ov_plants_alarm: "Satelita widzi przesychanie: {risk} — {triage}.", ov_topsoil_moist: "Wierzch gleby wilgotny ({pct}%).", ov_topsoil_dry: "Wierzch gleby suchy ({pct}%).", ov_topsoil_unreliable: "Wynik niepewny dla tego pola (słaba zgodność z danymi ERA5) — pomijany w ocenie.", ov_topsoil_old: "Brak świeżego pomiaru.", ov_topsoil_off: "Nie włączono (przycisk „Wilgotność (OPTRAM)”).", ov_temp_cool: "Rośliny chłodzą się — mają wodę.", ov_temp_warm: "Łan cieplejszy od dobrze nawodnionej roślinności o {dt} K — możliwy początek stresu.", ov_temp_hot: "Łan nagrzany prawie jak sucha gleba — rośliny ograniczają parowanie.", ov_temp_low_cover: "Za mało roślin, żeby ocenić temperaturę łanu.", ov_temp_old: "Brak świeżej sceny bez chmur.", ov_temp_off: "Nie włączono (przycisk „Termika (Landsat)”).", ov_weather_normal: "W ciągu {days} dni ok. {rain} mm deszczu, parowanie {et0} mm.", ov_weather_rain: "Zapowiadany deszcz: ok. {rain} mm w {days} dni.", ov_weather_dry_hot: "Sucho i gorąco: {rain} mm deszczu, do {tmax} °C — zużycie wody wzrośnie.", ov_weather_dry_month: "Ostatnie 30 dni wyjątkowo suche ({pct}. percentyl wielolecia).", ov_weather_no_data: "Brak prognozy.", ov_triage_pending: "czeka na ocenę doradcy", ov_triage_confirmed: "potwierdzone przez doradcę", ov_triage_needs_visit: "do sprawdzenia w terenie", ov_triage_rejected: "odrzucone", ov_today: "dziś", ov_tomorrow: "jutro", ov_in_days: "za {n} dni", ov_forecast: "prognoza", ov_chart_h: "Wszystkie źródła na jednym wykresie — im wyżej, tym więcej wody", ov_chart_empty: "Brak danych do wykresu.", ov_axis_y: "% wody / kondycji", ov_axis_mm: "mm", ov_l_soil: "woda w glebie", ov_l_threshold: "próg stresu", ov_l_topsoil: "wierzch gleby (OPTRAM)", ov_unreliable: "(niepewne)", ov_l_green: "zieleń łanu (NDVI)", ov_l_rain: "deszcz", ov_l_irr: "nawodnienie", ov_l_alarm: "alarm satelitarny", ov_read_h: "Jak czytać wykres", ov_read_soil: "Niebieska linia — ile wody zostało w strefie korzeni (100% = pełny profil). Linia kreskowana po „dziś” to prognoza.", ov_read_threshold: "Czerwona przerywana — próg: gdy niebieska spadnie poniżej, rośliny zaczynają cierpieć.", ov_read_topsoil: "Brązowe kwadraty — wilgotność kilku górnych cm gleby z satelity (blade = niepewne dla tego pola).", ov_read_green: "Zielona cienka linia — zieleń łanu (NDVI); jej spadek to zbiór, choroba albo susza.", ov_read_bars: "Słupki na dole (prawa oś, mm) — deszcz i nawodnienia.", ov_read_alarms: "Trójkąty u góry — alarmy satelitarne (czerwone = potwierdzone, żółte = czekają na doradcę).", ov_read_bands: "Tło: czerwone 0–30% sucho, żółte 30–60% umiarkowanie, zielone powyżej 60% wilgotno.", ov_balance_err: "Bilans chwilowo niedostępny (brak danych pogodowych) — spróbuj później.", ov_l_check: "ocena wilgotności w polu", ov_check_tip: "Ocena w polu: profil ok. {v}% pełny", ov_estimate: "szacunek", ov_read_estimate: "Kropkowany, bledszy odcinek niebieskiej linii — szacunek: wynik zależy jeszcze od stanu gleby na starcie bilansu (1 marca, z modelu ERA5-Land). Znika po deszczu lub nawodnieniu, które w pełni uzupełni profil, albo po ocenie wilgotności w polu.", ov_read_check: "Białe romby — ocena wilgotności w polu (doradca lub rolnik); bilans ustawia się na tę wartość.", ov_season_from: "Bilans od {d}.", ov_init_era5: "Stan gleby na start — z modelu ERA5-Land.", ov_init_full: "Stan gleby na start — założony pełny profil (brak danych ERA5-Land).", ov_est_until: "Do {d} wynik jest szacunkiem (linia kropkowana).", ov_est_all: "Cały wynik jest szacunkiem — od startu nie było deszczu ani nawodnienia, które w pełni uzupełniłoby profil. Ocena wilgotności w polu go urealni.", sc_h: "Ocena wilgotności gleby w polu", sc_note: "ustawia bilans wody w dniu oceny — bez miernika, metodą „gleba w dłoni”", sc_level: "Garść gleby z głębokości korzeni (ok. 20–30 cm):", sc_level_wet: "mokra — przy ściskaniu cieknie woda / błoto (pełny profil)", sc_level_moist: "tworzy trwałą, plastyczną kulkę, brudzi palce (ok. 87%)", sc_level_medium: "tworzy kulkę, która kruszy się przy nacisku (ok. 62%)", sc_level_dry: "tworzy słabą kulkę, która się rozpada, nie brudzi palców (ok. 37%)", sc_level_very_dry: "sucha, sypka albo twarda, nie tworzy kulki (ok. 12%)", sc_pct_ph: "albo % z czujnika", sc_depth_ph: "głęb. cm", sc_none: "Brak ocen.", sc_err: "Podaj datę i ocenę.", sc_src_farmer_panel: "rolnik", sc_src_manual: "doradca", sa_h: "Zasolenie i wody gruntowe", sa_src_class: "klasa", sa_src_ec_paste: "pomiar ECe", sa_src_ec_1_5: "pomiar EC 1:5", sa_src_ec_water: "z EC wody", sa_line_effect: "Zasolenie ECe {ece} dS/m ({src}) — powyżej progu uprawy ({thr} dS/m): rośliny pobierają ok. {less}% mniej wody, plon niższy o ok. {loss}% (FAO-56).", sa_line_ok: "Zasolenie ECe {ece} dS/m ({src}) — poniżej progu uprawy ({thr} dS/m), bez wpływu na bilans.", sa_none: "Brak danych o zasoleniu — bilans zakłada glebę niezasoloną.", sa_crop_unknown: "Uprawa nieznana — przyjęto próg 4 dS/m.", sa_gw_shallow: "Wody gruntowe płytko ({m} m): podsiąk do korzeni nie jest jeszcze liczony — bilans może zawyżać potrzebę nawadniania; ryzyko wtórnego zasolenia.", sa_hint_farmer_crust: "Rolnik zgłasza naloty soli ({d}) — zmierz EC albo wpisz klasę zasolenia.", sa_hint_farmer_leaching: "Rolnik podaje płukanie zimowe ({m3} m³/ha) — pole jest prawdopodobnie zasolone; wpisz klasę.", sa_cls_lbl: "Klasa zasolenia", sa_cls_unknown: "brak danych", sa_cls_none: "niezasolona (<2 dS/m)", sa_cls_slight: "słabo (2–4 dS/m)", sa_cls_moderate: "średnio (4–8 dS/m)", sa_cls_strong: "silnie (8–16 dS/m)", sa_cls_very_strong: "bardzo silnie (>16 dS/m)", sa_gw_lbl: "Głębokość wód gruntowych [m]", sa_gw_ph: "puste = nieznana", sa_ec_lbl: "Albo pomiar EC [dS/m = mS/cm]", sa_m_lbl: "Rodzaj pomiaru", sa_m_ec_1_5: "roztwór gleba:woda 1:5", sa_m_ece: "ECe (pasta nasycona, laboratorium)", sa_m_ec_water: "EC wody do nawadniania", sa_ec_hint: "Pomiar ma pierwszeństwo przed klasą. EC 1:5 przeliczamy na ECe wg gatunku gleby (×6–15); EC wody ×1,5.", tex_sand: "piasek", tex_loamy_sand: "piasek gliniasty", tex_sandy_loam: "glina piaszczysta", tex_loam: "glina lekka", tex_silt_loam: "pył gliniasty (less)", tex_silt: "pył", tex_sandy_clay_loam: "glina piaszczysto-ilasta", tex_clay_loam: "glina ilasta", tex_silty_clay_loam: "pył ilasty", tex_sandy_clay: "ił piaszczysty", tex_silty_clay: "ił pylasty", tex_clay: "ił", sw_h: "Pojemność wodna gleby", sw_src_soilgrids: "mapa gleb SoilGrids, 250 m", sw_src_texture_field: "gatunek gleby z pola", sw_line: "{taw} mm = {awc} mm/m × {zr} m korzeni ({src}: {tex}).", sw_line_manual: "{taw} mm — wpisane przez doradcę.", sw_line_default: "{taw} mm — założenie (brak danych o glebie).", sw_root_limited: "Korzenie ograniczone głębokością gleby.", sw_crop_unknown: "Uprawa nieznana — przyjęto 1 m korzeni.", sw_check_field: "Sprawdź gatunek gleby w polu.", sw_auto: "automatycznie (mapa gleb)", sw_texture_lbl: "Gatunek gleby (z pola)", sw_root_lbl: "Głębokość gleby / przeszkoda dla korzeni [cm]", sw_root_ph: "puste = bez ograniczeń", sw_taw_lbl: "Albo wpisz pojemność wodną wprost [mm] (np. z badania gleby)", sw_taw_ph: "puste = liczona automatycznie", sw_save: "Zapisz", sw_refresh: "Pobierz mapę gleb ponownie", sw_sg_profile: "Mapa gleb SoilGrids (strefa korzeni): piasek {s}%, ił {c}%.", sw_sg_err: "Mapa gleb SoilGrids chwilowo niedostępna — spróbujemy ponownie później.", sw_how_h: "Jak określić gatunek gleby w polu (próba wałeczkowa, 2 minuty)", sw_how_1: "Nie brudzi palców, nie da się zrobić kulki — piasek.", sw_how_2: "Lekko brudzi, kulka się rozsypuje — piasek gliniasty.", sw_how_3: "Kulka się robi, wałeczek grubszy niż 3 mm pęka — glina piaszczysta (szorstka) albo pył gliniasty (mączysta, jak mąka).", sw_how_4: "Wałeczek ok. 3 mm pęka przy zginaniu w kółko — glina lekka albo pył ilasty (jedwabisty, lepki).", sw_how_5: "Wałeczek 1–2 mm zgina się w kółko, po potarciu błyszczy — glina ilasta albo ił.", sw_how_feel: "Szorstka = dużo piasku; mączysta, jedwabista = dużo pyłu; lepka i błyszcząca = dużo iłu. Próbkę zwilż do konsystencji plasteliny.", soil_coarse: "gruboziarnista (piasek)", soil_medium: "średnia", soil_medium_fine: "średnio drobna", soil_fine: "drobna (ilasta)", soil_very_fine: "bardzo drobna", soil_organic: "organiczna", w_bal_init: "Start bilansu {d}: profil ok. {p}% pełny ({src}).", w_bal_init_era5: "z modelu ERA5-Land, gleba {soil}", w_bal_init_full: "założony", w_bal_anchor: "Od {d} wynik nie zależy już od stanu na starcie.", w_bal_lowconf_era5: "Szacunek: od startu bilansu nie było deszczu ani nawodnienia, które w pełni uzupełniłoby profil — wynik zależy od stanu początkowego z ERA5-Land. Ocena wilgotności w polu go urealni.",
+    ov_loading: "Zbieram dane ze wszystkich źródeł…", ov_overall_good: "Wody nie brakuje", ov_overall_watch: "Do obserwacji — pierwszy sygnał niedoboru wody", ov_overall_possible: "Możliwy niedobór wody", ov_overall_confirmed: "Niedobór wody — potwierdzają to różne źródła", ov_overall_conflict: "Źródła się nie zgadzają — sprawdź dziennik nawodnień", ov_overall_no_data: "Za mało danych do oceny", ov_agree_ok: "Żadne z {of} dostępnych źródeł nie pokazuje niedoboru wody.", ov_agree_problem: "Niedobór wody pokazuje {n} z {of} dostępnych źródeł.", ov_what_now: "Co teraz:", ov_action_irrigate: "nawodnić do {date}, ok. {mm} mm ({m3} m³/ha).", ov_action_check_irrigation: "sprawdzić pole i instalację nawadniającą — rośliny sygnalizują brak wody.", ov_action_rainfed: "pole bez nawadniania — obserwować; rozważyć zabiegi ograniczające parowanie.", ov_action_none: "nic nie trzeba robić.", ov_action_watch: "obserwować — sprawdzić ponownie po kolejnym przelocie satelity.", ov_action_log_water: "jeśli było nawodnienie albo płukanie, którego nie ma w dzienniku — wpisz je, a bilans się wyrówna.", ov_conflict_unlogged_water: "Model bilansu liczy glebę jako suchą, ale satelita widzi ją wilgotną (OPTRAM {w}). Najczęściej to woda spoza dziennika: nawodnienie, płukanie albo opad, którego nie złapał model.", ov_conflict_not_water: "W glebie wody nie brakuje, a rośliny wyglądają źle — przyczyna może być inna niż susza (choroba, szkodniki, nawożenie, zbiór).", ov_src_soil: "Woda w glebie (bilans)", ov_src_plants: "Rośliny (Sentinel-2)", ov_src_topsoil: "Wierzchnia warstwa gleby (OPTRAM)", ov_src_weather: "Pogoda", ov_st_ok: "w porządku", ov_st_warn: "uwaga", ov_st_bad: "problem", ov_st_none: "brak oceny", ov_as_of: "dane z {d}", ov_how_soil: "opady, parowanie i nawodnienia z dziennika", ov_how_plants: "zieleń i wilgotność liści z satelity", ov_how_topsoil: "kilka górnych cm gleby z satelity", ov_how_canopy_temp: "rośliny z wodą są chłodniejsze", ov_how_weather: "prognoza 7 dni i ostatnie 30 dni", ov_soil_ok: "Zapas wody wystarcza ({left_pct}% pojemności); według prognozy wystarczy na {days} dni.", ov_soil_soon: "Zostało {left_pct}% wody; próg stresu {when} ({date}).", ov_soil_approach: "Zapas wody się kończy — zostało {left_pct}% pojemności.", ov_soil_stress: "Rośliny w stresie wodnym — zużyto {used} mm, próg to {raw} mm.", ov_soil_no_data: "Brak danych pogodowych do policzenia bilansu.", ov_plants_ok: "Łan zielony (NDVI {ndvi}), bez oznak przesychania.", ov_plants_low_cover: "Za mało roślin, by ocenić łan (NDVI {ndvi}) — np. po zbiorze lub przed wschodami.", ov_plants_no_data: "Brak świeżego, bezchmurnego zdjęcia satelitarnego.", ov_plants_alarm: "Satelita widzi przesychanie: {risk} — {triage}.", ov_topsoil_moist: "Wierzch gleby wilgotny ({pct}%).", ov_topsoil_dry: "Wierzch gleby suchy ({pct}%).", ov_topsoil_unreliable: "Wynik niepewny dla tego pola (słaba zgodność z danymi ERA5) — pomijany w ocenie.", ov_topsoil_old: "Brak świeżego pomiaru.", ov_topsoil_off: "Nie włączono (przycisk „Wilgotność (OPTRAM)”).", ov_temp_cool: "Rośliny chłodzą się — mają wodę.", ov_temp_warm: "Łan cieplejszy od dobrze nawodnionej roślinności o {dt} K — możliwy początek stresu.", ov_temp_hot: "Łan nagrzany prawie jak sucha gleba — rośliny ograniczają parowanie.", ov_temp_low_cover: "Za mało roślin, żeby ocenić temperaturę łanu.", ov_temp_old: "Brak świeżej sceny bez chmur.", ov_temp_off: "Nie włączono (przycisk „Termika (Landsat)”).", ov_weather_normal: "W ciągu {days} dni ok. {rain} mm deszczu, parowanie {et0} mm.", ov_weather_rain: "Zapowiadany deszcz: ok. {rain} mm w {days} dni.", ov_weather_dry_hot: "Sucho i gorąco: {rain} mm deszczu, do {tmax} °C — zużycie wody wzrośnie.", ov_weather_dry_month: "Ostatnie 30 dni wyjątkowo suche ({pct}. percentyl wielolecia).", ov_weather_no_data: "Brak prognozy.", ov_triage_pending: "czeka na ocenę doradcy", ov_triage_confirmed: "potwierdzone przez doradcę", ov_triage_needs_visit: "do sprawdzenia w terenie", ov_triage_rejected: "odrzucone", ov_today: "dziś", ov_tomorrow: "jutro", ov_in_days: "za {n} dni", ov_forecast: "prognoza", ov_chart_h: "Wszystkie źródła na jednym wykresie — im wyżej, tym więcej wody", ov_range_all: "Cały dostępny", ov_range_3m: "Ostatnie 3 miesiące", ov_range_pick: "Zaznacz okres", ov_range_pick_hint: "Przeciągnij po wykresie z wciśniętym przyciskiem myszy", ov_chart_empty: "Brak danych do wykresu.", ov_axis_y: "% wody / kondycji", ov_axis_mm: "mm", ov_l_soil: "woda w glebie", ov_l_threshold: "próg stresu", ov_l_topsoil: "wierzch gleby (OPTRAM)", ov_unreliable: "(niepewne)", ov_l_green: "zieleń łanu (NDVI)", ov_l_green_evi2: "zieleń łanu (EVI2, bez nasycenia)", ov_l_chloro: "chlorofil (red-edge, % szczytu sezonu)", ov_irr_h: "Czy satelity widzą nawodnienia z dziennika? Widać {s} z {n} (nie widać: {x}, brak danych: {z})", ov_irr_h_none: "Czy satelity widzą nawodnienia? Możliwe nawodnienia spoza dziennika", ov_irr_sig_optram: "gleba (OPTRAM)", ov_irr_sig_vv: "radar", ov_irr_sig_tsi: "termika", ov_irr_sig_ndmi: "woda w liściach", ov_irr_th_rain: "deszcz", ov_irr_tip: "przed {b} ({db}) → po {a} ({da})", ov_irr_rain: "w tym czasie deszcz {mm} mm — reakcja może być od deszczu", ov_irr_nodata: "brak pomiaru tuż przed albo tuż po nawodnieniu", ov_irr_dense: "łan", ov_irr_low: "goło", ov_irr_na_dense_canopy: "zwarty łan zasłania glebę — ten sygnał nie widzi nawodnienia", ov_irr_na_low_cover: "za mało roślin — sygnał dotyczy łanu", ov_irr_unlogged_h: "Możliwe nawodnienia spoza dziennika:", ov_irr_unlogged: "{a}–{b}: skok {s} bez wpisu i bez deszczu", ov_irr_sigg_optram: "wilgotności gleby (OPTRAM)", ov_irr_sigg_tsi: "chłodzenia łanu (termika)", ov_irr_note: "✓ widać reakcję, ✗ nie widać mimo pomiaru przed i po, – brak pomiaru w oknie. Najedź na komórkę, żeby zobaczyć wartości. Progi robocze, niekalibrowane; przy zwartym łanie glebę widzą tylko termika i woda w liściach.", w_ev_delete: "Usuń wpis", w_ev_delete_confirm: "Usunąć nawodnienie z {d}? Bilans przeliczy się bez niego.", ov_eta_line: "Parowanie pola wg termiki {from}–{to}: {eta} mm; wg bilansu: {model} mm ({pct}%).", ov_eta_agree: "Zgodne z bilansem.", ov_eta_lower: "Pole parowało wyraźnie mniej, niż zakłada bilans — możliwy niedobór wody albo nawodnienia mniejsze niż w dzienniku.", ov_eta_higher: "Pole parowało wyraźnie więcej, niż zakłada bilans — możliwa woda spoza dziennika albo zaniżone dawki.", ov_eta_approx: "Pole < 3 ha — przybliżone (piksel termiczny 100 m).", ov_eta_tip: "parowanie ok. {eta} mm/dzień (bilans: {model} mm)", ov_l_leafw: "woda w liściach (NDMI)", ov_leafw_tip: "woda w liściach: {v}% (NDMI {nd})", ov_read_leafw: "Turkusowa — woda w liściach (NDMI) na skali od suchej, gołej gleby (0%) do zwartego, nawodnionego łanu (100%). To główny sygnał stresu z Sentinel-2 — czytaj razem z fioletową linią chlorofilu.", ov_chloro_tip: "chlorofil: {v}% szczytu sezonu (CIred-edge {ci})", ov_res_backfill_upd: "; uzupełniono EVI2 i chlorofil w {u} starszych obserwacjach", ov_reason_new_indicators: "dopisanie EVI2 i chlorofilu do historii (jednorazowo)", ov_l_rain: "deszcz", ov_l_irr: "nawodnienie", ov_l_alarm: "alarm satelitarny", ov_read_h: "Jak czytać wykres", ov_read_soil: "Niebieska linia — ile wody zostało w strefie korzeni (100% = pełny profil). Linia kreskowana po „dziś” to prognoza.", ov_read_threshold: "Czerwona przerywana — próg: gdy niebieska spadnie poniżej, rośliny zaczynają cierpieć.", ov_read_topsoil: "Brązowe kwadraty — wilgotność kilku górnych cm gleby z satelity (blade = niepewne dla tego pola).", ov_read_green: "Zielona cienka linia — zieleń łanu (NDVI); jej spadek to zbiór, choroba albo susza.", ov_read_green_evi2: "Ciemnozielona przerywana — zieleń łanu z EVI2. Przy zwartym łanie NDVI dochodzi do ok. 85% i stoi, a EVI2 dalej pokazuje, czy łan przybiera, czy słabnie.", ov_read_chloro: "Fioletowa — chlorofil (red-edge), w % najwyższej wartości w tym sezonie. Porównuj z turkusową linią wody w liściach: gdy liście tracą wodę, a chlorofil się trzyma — brakuje wody; gdy spada chlorofil, a woda w liściach jest — raczej azot, choroba albo zasolenie. Niekalibrowane, bez progów.", ov_read_bars: "Słupki na dole (prawa oś, mm) — deszcz i nawodnienia.", ov_read_alarms: "Trójkąty u góry — alarmy satelitarne (czerwone = potwierdzone, żółte = czekają na doradcę).", ov_read_bands: "Tło: czerwone 0–30% sucho, żółte 30–60% umiarkowanie, zielone powyżej 60% wilgotno.", ov_balance_err: "Bilans chwilowo niedostępny (brak danych pogodowych) — spróbuj później.", ov_l_check: "ocena wilgotności w polu", ov_check_tip: "Ocena w polu: profil ok. {v}% pełny", ov_estimate: "szacunek", ov_read_estimate: "Kropkowany, bledszy odcinek niebieskiej linii — szacunek: wynik zależy jeszcze od stanu gleby na starcie bilansu (1 marca, z modelu ERA5-Land). Znika po deszczu lub nawodnieniu, które w pełni uzupełni profil, albo po ocenie wilgotności w polu.", ov_read_check: "Białe romby — ocena wilgotności w polu (doradca lub rolnik); bilans ustawia się na tę wartość.", ov_season_from: "Bilans od {d}.", ov_init_era5: "Stan gleby na start — z modelu ERA5-Land.", ov_init_full: "Stan gleby na start — założony pełny profil (brak danych ERA5-Land).", ov_est_until: "Do {d} wynik jest szacunkiem (linia kropkowana).", ov_est_all: "Cały wynik jest szacunkiem — od startu nie było deszczu ani nawodnienia, które w pełni uzupełniłoby profil. Ocena wilgotności w polu go urealni.", sc_h: "Ocena wilgotności gleby w polu", sc_note: "ustawia bilans wody w dniu oceny — bez miernika, metodą „gleba w dłoni”", sc_level: "Garść gleby z głębokości korzeni (ok. 20–30 cm):", sc_level_wet: "mokra — przy ściskaniu cieknie woda / błoto (pełny profil)", sc_level_moist: "tworzy trwałą, plastyczną kulkę, brudzi palce (ok. 87%)", sc_level_medium: "tworzy kulkę, która kruszy się przy nacisku (ok. 62%)", sc_level_dry: "tworzy słabą kulkę, która się rozpada, nie brudzi palców (ok. 37%)", sc_level_very_dry: "sucha, sypka albo twarda, nie tworzy kulki (ok. 12%)", sc_pct_ph: "albo % z czujnika", sc_depth_ph: "głęb. cm", sc_none: "Brak ocen.", sc_err: "Podaj datę i ocenę.", sc_src_farmer_panel: "rolnik", sc_src_manual: "doradca", sa_h: "Zasolenie i wody gruntowe", sa_src_class: "klasa", sa_src_ec_paste: "pomiar ECe", sa_src_ec_1_5: "pomiar EC 1:5", sa_src_ec_water: "z EC wody", sa_line_effect: "Zasolenie ECe {ece} dS/m ({src}) — powyżej progu uprawy ({thr} dS/m): rośliny pobierają ok. {less}% mniej wody, plon niższy o ok. {loss}% (FAO-56).", sa_line_ok: "Zasolenie ECe {ece} dS/m ({src}) — poniżej progu uprawy ({thr} dS/m), bez wpływu na bilans.", sa_none: "Brak danych o zasoleniu — bilans zakłada glebę niezasoloną.", sa_crop_unknown: "Uprawa nieznana — przyjęto próg 4 dS/m.", sa_gw_shallow: "Wody gruntowe płytko ({m} m): podsiąk do korzeni nie jest jeszcze liczony — bilans może zawyżać potrzebę nawadniania; ryzyko wtórnego zasolenia.", sa_hint_farmer_crust: "Rolnik zgłasza naloty soli ({d}) — zmierz EC albo wpisz klasę zasolenia.", sa_hint_sat_suspect: "Satelita: uporczywie słabsze miejsca na {p}% pola — zmierz EC w punktach z mapy poniżej.", ss_intro: "Podejrzenie zasolenia z 6 sezonów Sentinel-2: miejsca, gdzie łan rok w rok jest słabszy niż reszta pola, a wiosną gleba jaśniejsza (naloty soli). Wskazuje, gdzie zmierzyć EC.", ss_btn: "Sprawdź podejrzenie zasolenia z satelity (ok. {pu} PU)", ss_btn_again: "Przelicz ponownie (ok. {pu} PU)", ss_confirm: "Pobrać 6 sezonów Sentinel-2 dla tego pola? Koszt ok. {pu} PU, potrwa do minuty.", ss_running: "pobieram 6 sezonów…", ss_head: "Z satelity ({y}, {n} sezonów z łanem): podejrzenie zasolenia na {p}% pola", ss_too_few: "Z satelity: za mało sezonów z łanem ({n}; {y}) — ocena wymaga co najmniej 3.", ss_cls_3: "silne podejrzenie", ss_cls_2: "podejrzenie", ss_cls_1: "do obserwacji", ss_cls_0: "bez podejrzeń", ss_edge: "brzeg pola (10 m) — nie oceniano", ss_pts_h: "Gdzie zmierzyć EC (próbka 0–30 cm):", ss_pt_suspect: "punkt {n} — podejrzana plama", ss_pt_control: "punkt K — kontrola, najlepsza część pola", ss_note: "To nie pomiar: uporczywie słabe miejsca dają też podmokłości, zagęszczenie, koniec bruzdy, płytka gleba. Porównaj EC z punktów z punktem kontrolnym. Progi robocze.", sa_hint_farmer_leaching: "Rolnik podaje płukanie zimowe ({m3} m³/ha) — pole jest prawdopodobnie zasolone; wpisz klasę.", sa_cls_lbl: "Klasa zasolenia", sa_cls_unknown: "brak danych", sa_cls_none: "niezasolona (<2 dS/m)", sa_cls_slight: "słabo (2–4 dS/m)", sa_cls_moderate: "średnio (4–8 dS/m)", sa_cls_strong: "silnie (8–16 dS/m)", sa_cls_very_strong: "bardzo silnie (>16 dS/m)", sa_gw_lbl: "Głębokość wód gruntowych [m]", sa_gw_ph: "puste = nieznana", sa_ec_lbl: "Albo pomiar EC [dS/m = mS/cm]", sa_m_lbl: "Rodzaj pomiaru", sa_m_ec_1_5: "roztwór gleba:woda 1:5", sa_m_ece: "ECe (pasta nasycona, laboratorium)", sa_m_ec_water: "EC wody do nawadniania", sa_ec_hint: "Pomiar ma pierwszeństwo przed klasą. EC 1:5 przeliczamy na ECe wg gatunku gleby (×6–15); EC wody ×1,5.", tex_sand: "piasek", tex_loamy_sand: "piasek gliniasty", tex_sandy_loam: "glina piaszczysta", tex_loam: "glina lekka", tex_silt_loam: "pył gliniasty (less)", tex_silt: "pył", tex_sandy_clay_loam: "glina piaszczysto-ilasta", tex_clay_loam: "glina ilasta", tex_silty_clay_loam: "pył ilasty", tex_sandy_clay: "ił piaszczysty", tex_silty_clay: "ił pylasty", tex_clay: "ił", sw_h: "Pojemność wodna gleby", sw_src_soilgrids: "mapa gleb SoilGrids, 250 m", sw_src_texture_field: "gatunek gleby z pola", sw_line: "{taw} mm = {awc} mm/m × {zr} m korzeni ({src}: {tex}).", sw_line_manual: "{taw} mm — wpisane przez doradcę.", sw_line_default: "{taw} mm — założenie (brak danych o glebie).", sw_root_limited: "Korzenie ograniczone głębokością gleby.", sw_crop_unknown: "Uprawa nieznana — przyjęto 1 m korzeni.", sw_check_field: "Sprawdź gatunek gleby w polu.", sw_auto: "automatycznie (mapa gleb)", sw_texture_lbl: "Gatunek gleby (z pola)", sw_root_lbl: "Głębokość gleby / przeszkoda dla korzeni [cm]", sw_root_ph: "puste = bez ograniczeń", sw_taw_lbl: "Albo wpisz pojemność wodną wprost [mm] (np. z badania gleby)", sw_taw_ph: "puste = liczona automatycznie", sw_save: "Zapisz", sw_refresh: "Pobierz mapę gleb ponownie", sw_sg_profile: "Mapa gleb SoilGrids (strefa korzeni): piasek {s}%, ił {c}%.", sw_sg_err: "Mapa gleb SoilGrids chwilowo niedostępna — spróbujemy ponownie później.", sw_how_h: "Jak określić gatunek gleby w polu (próba wałeczkowa, 2 minuty)", sw_how_1: "Nie brudzi palców, nie da się zrobić kulki — piasek.", sw_how_2: "Lekko brudzi, kulka się rozsypuje — piasek gliniasty.", sw_how_3: "Kulka się robi, wałeczek grubszy niż 3 mm pęka — glina piaszczysta (szorstka) albo pył gliniasty (mączysta, jak mąka).", sw_how_4: "Wałeczek ok. 3 mm pęka przy zginaniu w kółko — glina lekka albo pył ilasty (jedwabisty, lepki).", sw_how_5: "Wałeczek 1–2 mm zgina się w kółko, po potarciu błyszczy — glina ilasta albo ił.", sw_how_feel: "Szorstka = dużo piasku; mączysta, jedwabista = dużo pyłu; lepka i błyszcząca = dużo iłu. Próbkę zwilż do konsystencji plasteliny.", soil_coarse: "gruboziarnista (piasek)", soil_medium: "średnia", soil_medium_fine: "średnio drobna", soil_fine: "drobna (ilasta)", soil_very_fine: "bardzo drobna", soil_organic: "organiczna", w_bal_init: "Start bilansu {d}: profil ok. {p}% pełny ({src}).", w_bal_init_era5: "z modelu ERA5-Land, gleba {soil}", w_bal_init_full: "założony", w_bal_anchor: "Od {d} wynik nie zależy już od stanu na starcie.", w_bal_lowconf_era5: "Szacunek: od startu bilansu nie było deszczu ani nawodnienia, które w pełni uzupełniłoby profil — wynik zależy od stanu początkowego z ERA5-Land. Ocena wilgotności w polu go urealni.",
     ov_soil_no_log: "Uwaga: w dzienniku nie ma nawodnień z ostatnich 3 miesięcy — bilans zakłada, że pole nie było nawadniane.", ov_conflict_unlogged_water_temp: "Model bilansu liczy glebę jako suchą, ale termika pokazuje chłodny, transpirujący łan — rośliny mają wodę. Prawdopodobnie nawodnienia nie są wpisywane do dziennika.",
-    ov_prep_btn: "🔄 Przygotuj / odśwież wszystko", ov_more: "Szczegóły i narzędzia eksperckie", ov_prep_confirm: "Uruchomić analizę pola?\n\n{list}\n\nSzacowany koszt: ok. {pu} PU (Sentinel Hub). Potrwa do 1–2 minut.", ov_prep_nothing: "Nic do zrobienia.", ov_prep_h: "Analiza pola", ov_prep_running: "w toku…", ov_step_backfill: "Historia obserwacji (od początku sezonu)", ov_step_optram: "Kalibracja wilgotności gleby (OPTRAM, 12 mies.)", ov_step_thermal: "Termika Landsat (6 mies.)", ov_step_check_now: "Najnowsze dane z satelitów", ov_reason_has_history: "pominięte — historia już jest", ov_reason_calibrated: "pominięte — już skalibrowane", ov_reason_has_data: "pominięte — dane już są (odświeżą się w ostatnim kroku)", ov_reason_small_field: "pominięte — pole {ha} ha, za małe dla piksela termicznego 100 m", ov_reason_no_geometry: "brak obrysu pola", ov_reason_always: "", ov_reason_few_obs: "", ov_reason_season_gap: "zieleń łanu od 1 marca — do bilansu wody", ov_reason_not_calibrated: "", ov_reason_old_calibration: "", ov_reason_no_data: "", ov_res_backfill: "dopisano {n} obserwacji (czystych scen: {c})", ov_res_optram: "jakość {q}, zgodność z ERA5 r = {r}", ov_res_thermal: "scen bez chmur nad polem: {n}", ov_res_check_fresh: "pobrano nową obserwację", ov_res_check_none: "brak nowej czystej sceny — zostają ostatnie dane",
+    ov_prep_btn: "🔄 Przygotuj / odśwież wszystko", ov_more: "Szczegóły i narzędzia eksperckie", ov_prep_confirm: "Uruchomić analizę pola?\n\n{list}\n\nSzacowany koszt: ok. {pu} PU (Sentinel Hub). Potrwa do 1–2 minut.", ov_prep_nothing: "Nic do zrobienia.", ov_prep_h: "Analiza pola", ov_prep_running: "w toku…", ov_step_backfill: "Historia obserwacji (od początku sezonu)", ov_step_optram: "Kalibracja wilgotności gleby (OPTRAM, 12 mies.)", ov_step_thermal: "Termika Landsat (od początku sezonu)", ov_step_thermal_refresh: "Termika Landsat — nowe sceny", ov_step_optram_refresh: "Wilgotność gleby OPTRAM — nowe sceny", ov_step_soil: "Pojemność wodna gleby (SoilGrids)", ov_step_check_now: "Najnowsze dane z satelitów", ov_reason_has_history: "pominięte — historia kompletna, najnowsze sceny pobierze ostatni krok", ov_reason_stale: "luka od {from}", ov_reason_calibrated: "kalibracja jest — dociąga nowe sceny", ov_reason_poor_calibration: "pominięte — kalibracja wyszła słaba, OPTRAM na tym polu nie jest wiarygodny", ov_reason_has_data: "", ov_reason_small_field: "pole {ha} ha — piksel termiczny 100 m miesza się z otoczeniem, wynik przybliżony", ov_reason_soil_soilgrids: "pominięte — pojemność z SoilGrids już jest ({mm} mm)", ov_reason_soil_manual: "pominięte — pojemność wpisana ręcznie ({mm} mm)", ov_reason_soil_texture_field: "pominięte — pojemność z gatunku gleby z pola ({mm} mm)", ov_reason_soil_default: "bilans liczy teraz z założonych 100 mm", ov_reason_no_geometry: "brak obrysu pola", ov_reason_always: "", ov_reason_few_obs: "", ov_reason_season_gap: "zieleń łanu od 1 marca — do bilansu wody", ov_reason_not_calibrated: "", ov_reason_old_calibration: "", ov_reason_no_data: "", ov_res_backfill: "dopisano {n} obserwacji (czystych scen: {c})", ov_res_optram: "jakość {q}, zgodność z ERA5 r = {r}", ov_res_thermal: "scen bez chmur nad polem: {n}", ov_res_check_fresh: "pobrano nową obserwację", ov_res_check_none: "brak nowej czystej sceny — zostają ostatnie dane", ov_res_optram_refresh: "nowych scen: {n}", ov_res_soil: "{mm} mm wody dostępnej w strefie korzeni", ov_res_soil_default: "bilans liczy z {mm} mm",
     ov_cool_tip1: "pole {f} °C · najlepiej nawodnione pola wokół {c} °C · sucha gleba {h} °C", ov_cool_tip2: "= {v}% → {verdict}", ov_cool_yes: "rośliny mają wodę", ov_cool_mid: "możliwy początek braku wody", ov_cool_no: "rośliny cierpią z braku wody albo jest ich mało",
     ov_l_cooling: "rośliny mają wodę? (temperatura łanu)", ov_src_canopy_temp: "Rośliny mają wodę? (temperatura łanu)", ov_read_cooling: "Pomarańczowe trójkąty — czy rośliny mają wodę, sądząc po ich temperaturze z satelity Landsat. Roślina z wodą paruje i chłodzi się jak spocony człowiek; bez wody przestaje parować i się nagrzewa — często kilka dni zanim zżółknie. 100% = pole tak chłodne jak najlepiej nawodnione pola w okolicy, 0% = gorące jak sucha, goła gleba. Pokazywane tylko, gdy na polu rośnie łan.",
     y_inner: "(analizowane {ha} ha — bez pasa 10 m przy granicy, gdzie piksele mieszają się z drogą i miedzą)", ov_action_weather_watch: "na polu wszystko w porządku, ale prognoza zapowiada suszę lub upał — sprawdź ponownie za kilka dni.",
@@ -7284,9 +7899,9 @@ const EXTRA_I18N = {
     op_btn: "Moisture (OPTRAM)", op_title: "Topsoil moisture from satellite (OPTRAM)", op_intro: "OPTRAM estimates moisture from how dark soil and vegetation look in shortwave infrared (Sentinel-2 band B12): water absorbs this light. Pixels from the area around the field over many dates form a trapezoid on an NDVI × STR plot — the lower edge is the driest state and the upper edge the wettest for a given vegetation cover. The field’s position between the edges gives relative moisture W from 0 (dry) to 1 (wet).", op_caveats: "W is relative, not volumetric %. It reflects the top few centimetres, and under a dense canopy (NDVI > 0.6) mostly plant water content. The trapezoid is fitted for an area of ~1.5 km around the field — recalibrate after a season change or major crop changes nearby. This is context for the verdict and water balance, not a separate alarm.", op_months: "last {n} months", op_calibrate: "Calibrate trapezoid", op_recalibrate: "Recalibrate", op_calibrating: "Computing… (up to 2 min)", op_calib_cost: "one Process API request (up to 60 scenes) + one Statistical API request", op_no_series: "No clear field observations in the calibration period.", op_pct: "{p}th percentile of this field’s values", op_cls_dry: "dry", op_cls_mid: "moderately moist", op_cls_wet: "moist", op_dense: "Dense canopy — the value mostly reflects plant water rather than soil.", op_quality: "Calibration quality", op_q_good: "good", op_q_limited: "limited", op_q_poor: "unreliable", op_calib_info: "period {from} – {to}, {s} scenes, {px} pixels", op_era5: "Agreement with ERA5-Land soil moisture 0–7 cm: r = {r} ({n} common dates).", op_era5_good: "— good, calibration looks reliable.", op_era5_mid: "— moderate.", op_era5_bad: "— weak, treat W with caution.", op_era5_none: "Too few dates shared with ERA5-Land to compare (run “Check now” or the history replay).", op_chart_trap: "Trapezoid: area pixels, dry and wet edges, field (orange)", op_chart_series: "Field moisture W over time and ERA5-Land 0–7 cm", op_pixels: "area pixels", op_edge_dry: "dry edge", op_edge_wet: "wet edge", op_field: "field", op_era5_label: "ERA5-Land 0–7 cm", op_refresh: "Fetch last 45 days", op_delete: "Delete calibration", op_delete_confirm: "Delete the OPTRAM calibration and moisture series for this field?", op_how: "How it works and limitations",
     th_btn: "Thermal (Landsat)", th_title: "Landsat 8/9 thermal — water stress from canopy temperature", th_intro: "A crop with access to water cools itself by transpiration; when water runs short it closes its stomata and heats up — often days before NDVI/NDMI drop. We compare field temperature with the coolest dense (well-watered) vegetation and the hottest bare soil within ~1.5 km on the same scene. Thermal stress index TSI: 0 = as cool as the best-watered vegetation, 1 = as hot as dry soil.", th_caveats: "Copernicus Data Space offers Landsat only at Level-1 (since 2021): surface temperature is approximate (emissivity from NDVI, no atmospheric correction), so treat °C as indicative — TSI is relative within the scene and insensitive to that. The thermal pixel is 100 m: on fields under ~3 ha the result mixes with surroundings. Overpass ~10:30–11:00, every ~8 days (L8+L9), clear sky only. In winter and early spring there is no dense vegetation nearby = no TSI.", th_fetch: "Fetch thermal data", th_fetch_again: "Fetch again", th_cost: "one Process API request (up to 60 scenes)", th_small: "The field is {ha} ha — the Landsat thermal pixel is 100 m, so the result will mix with surroundings.", th_cls_ok: "crop is cooling by transpiration", th_cls_mid: "possible onset of stress", th_cls_high: "likely water stress or poor cover", th_no_ref: "No dense vegetation or bare soil nearby on this scene — TSI cannot be computed.", th_latest: "Scene {d}: field ≈ {t} °C · coolest vegetation ≈ {c} °C · hottest soil ≈ {h} °C · field NDVI {n}", th_spread: "Temperature spread within the field (p90−p10): {k} K — irrigation may be uneven.", th_low_cover: "Poor cover — temperature mostly reflects the soil.", th_n: "Cloud-free scenes over the field: {n}", th_tsi: "TSI (thermal stress)", th_t_field: "field °C", th_t_cold: "cool vegetation °C", th_t_hot: "hot soil °C", th_delete: "Delete thermal data", th_delete_confirm: "Delete stored thermal scenes for this field?", th_source: "Landsat 8/9 (USGS/NASA) via Copernicus Data Space",
     bc_h: "Cover crop biomass and nitrogen — calibration on field samples (CIred-edge)", bc_intro: "The current biomass model comes from maize literature. CIred-edge (B07/B05 − 1) grows linearly with canopy chlorophyll and nitrogen and does not saturate in lush cover crops — but there are no published coefficients for Polish mixtures. Enter samples from your visits (frames, cutting, weighing): the app finds the nearest clear Sentinel-2 scene, compares models and lets you approve a model fitted to your data.", bc_proto_h: "How to take a sample", bc_proto_1: "Timing: within 5 days of a cloud-free Sentinel-2 overpass (ideally on the day). The app finds the nearest clear scene itself.", bc_proto_2: "Place 4 frames of 0.25 m² (50×50 cm) in spots typical for the field, at least 20 m from the edge; do not pick the best or worst spots.", bc_proto_3: "Cut all above-ground biomass at ground level and weigh the fresh mass from each frame (average in grams).", bc_proto_4: "Dry matter: dry a subsample at 60–65 °C to constant weight (~48 h) or use a tabulated DM % for the species; N — from lab analysis (% N in DM), optional.", bc_proto_5: "Sample fields with different vigour — from poor to very lush. The model can be approved from 8 samples and is reliable from about 15.", bc_f_parcel: "Parcel ID (ULDK)", bc_f_date: "Sample date", bc_f_mix: "Mixture / species", bc_f_frames: "Number of frames", bc_f_frame_m2: "Frame area (m²)", bc_f_fresh: "Fresh mass — average per frame (g)", bc_f_dmpct: "Dry matter (% of fresh)", bc_f_dm: "or directly: dry matter (t/ha)", bc_f_npct: "N in dry matter (%, optional)", bc_add: "Add sample", bc_calc: "= {dm} t DM/ha", bc_calc_n: "{n} kg N/ha", bc_missing: "Enter parcel ID, date and mass (fresh with DM % or dry t/ha).", bc_matching: "Looking for a Sentinel-2 scene…", bc_added_ok: "Added. Scene {d}, CIre {c}.", bc_added_nomatch: "Added, but no clear scene within ±5 days — the sample will not enter the fit (try “Match scene” later).", bc_empty: "No samples yet.", bc_col_parcel: "Parcel", bc_col_dm: "Dry matter t/ha", bc_col_scene: "S2 scene", bc_rematch: "Match scene", bc_rematch_fail: "error — try later", bc_delete_confirm: "Delete this sample?", bc_active: "Model in use:", bc_target_dm: "biomass", bc_target_n: "N uptake", bc_lit_model: "literature (EVI+NDRE+RVI, maize)", bc_clear: "Back to literature", bc_clear_confirm: "Withdraw the calibrated model? Estimates will return to the literature model.", bc_fit_h: "Fit on {n} samples with a matched scene", bc_col_model: "Model", bc_rmse_cv: "cross-validation error", bc_linear: "linear", bc_cmp_hint: "Cross-validation error: each sample is predicted by a model fitted to the others — an honest measure of error on a new field. Lower is better.", bc_apply_dm: "Approve biomass model", bc_apply_n: "Approve nitrogen model", bc_apply_dm_confirm: "Approve the CIre biomass model? From now on biomass estimates (including stored monitoring data) will use it.", bc_apply_n_confirm: "Approve the CIre N uptake model?", bc_applied: "Approved. Stored observations recomputed: {n}.", bc_samples: "samples", bc_fit_line: "fit", bc_n_line: "N in biomass: {lo}–{hi} kg/ha", bc_src_field: "model calibrated on field samples", bc_src_lit: "literature model (not calibrated on cover crops)", bc_extrap: "CIre outside the sample range — extrapolation",
-    ov_loading: "Collecting data from all sources…", ov_overall_good: "No water shortage", ov_overall_watch: "Watch — first sign of water shortage", ov_overall_possible: "Possible water shortage", ov_overall_confirmed: "Water shortage — confirmed by several sources", ov_overall_conflict: "Sources disagree — check the irrigation log", ov_overall_no_data: "Not enough data to assess", ov_agree_ok: "None of the {of} available sources shows a water shortage.", ov_agree_problem: "{n} of {of} available sources show a water shortage.", ov_what_now: "What now:", ov_action_irrigate: "irrigate by {date}, approx. {mm} mm ({m3} m³/ha).", ov_action_check_irrigation: "check the field and the irrigation system — the crop signals lack of water.", ov_action_rainfed: "rainfed field — monitor; consider practices that reduce evaporation.", ov_action_none: "nothing to do.", ov_action_watch: "monitor — check again after the next satellite overpass.", ov_action_log_water: "if there was irrigation or leaching not in the log — add it and the balance will catch up.", ov_conflict_unlogged_water: "The balance model counts the soil as dry, but the satellite sees it moist (OPTRAM {w}). Most often this is water missing from the log: irrigation, leaching or rain the model did not catch.", ov_conflict_not_water: "The soil has enough water but the crop looks poor — the cause may be something other than drought (disease, pests, fertilisation, harvest).", ov_src_soil: "Soil water (balance)", ov_src_plants: "Crop (Sentinel-2)", ov_src_topsoil: "Topsoil (OPTRAM)", ov_src_weather: "Weather", ov_st_ok: "fine", ov_st_warn: "caution", ov_st_bad: "problem", ov_st_none: "not assessed", ov_as_of: "data from {d}", ov_how_soil: "rain, evaporation and logged irrigation", ov_how_plants: "leaf greenness and moisture from satellite", ov_how_topsoil: "top few cm of soil from satellite", ov_how_canopy_temp: "crops with water are cooler", ov_how_weather: "7-day forecast and last 30 days", ov_soil_ok: "Enough water ({left_pct}% of capacity); per the forecast it will last {days} days.", ov_soil_soon: "{left_pct}% of water left; stress threshold {when} ({date}).", ov_soil_approach: "Soil water running low — {left_pct}% of capacity left.", ov_soil_stress: "Crop under water stress — {used} mm used, threshold is {raw} mm.", ov_soil_no_data: "No weather data to compute the balance.", ov_plants_ok: "Green canopy (NDVI {ndvi}), no signs of drying.", ov_plants_low_cover: "Too little crop to assess the canopy (NDVI {ndvi}) — e.g. after harvest or before emergence.", ov_plants_no_data: "No recent cloud-free satellite image.", ov_plants_alarm: "Satellite sees drying: {risk} — {triage}.", ov_topsoil_moist: "Topsoil moist ({pct}%).", ov_topsoil_dry: "Topsoil dry ({pct}%).", ov_topsoil_unreliable: "Unreliable for this field (weak agreement with ERA5) — left out of the assessment.", ov_topsoil_old: "No recent measurement.", ov_topsoil_off: "Not enabled (“Moisture (OPTRAM)” button).", ov_temp_cool: "Crop is cooling itself — it has water.", ov_temp_warm: "Canopy {dt} K warmer than well-watered vegetation — possible onset of stress.", ov_temp_hot: "Canopy almost as hot as dry soil — the crop is limiting transpiration.", ov_temp_low_cover: "Too little crop to assess canopy temperature.", ov_temp_old: "No recent cloud-free scene.", ov_temp_off: "Not enabled (“Thermal (Landsat)” button).", ov_weather_normal: "Next {days} days: approx. {rain} mm rain, {et0} mm evaporation.", ov_weather_rain: "Rain expected: approx. {rain} mm in {days} days.", ov_weather_dry_hot: "Dry and hot: {rain} mm rain, up to {tmax} °C — water use will rise.", ov_weather_dry_month: "Last 30 days exceptionally dry ({pct}th percentile of the long-term record).", ov_weather_no_data: "No forecast.", ov_triage_pending: "awaiting advisor review", ov_triage_confirmed: "confirmed by advisor", ov_triage_needs_visit: "to be checked in the field", ov_triage_rejected: "rejected", ov_today: "today", ov_tomorrow: "tomorrow", ov_in_days: "in {n} days", ov_forecast: "forecast", ov_chart_h: "All sources on one chart — higher means more water", ov_chart_empty: "No data for the chart.", ov_axis_y: "% water / condition", ov_axis_mm: "mm", ov_l_soil: "soil water", ov_l_threshold: "stress threshold", ov_l_topsoil: "topsoil (OPTRAM)", ov_unreliable: "(unreliable)", ov_l_green: "canopy greenness (NDVI)", ov_l_rain: "rain", ov_l_irr: "irrigation", ov_l_alarm: "satellite alarm", ov_read_h: "How to read the chart", ov_read_soil: "Blue line — water left in the root zone (100% = full profile). Dashed after “today” is the forecast.", ov_read_threshold: "Red dashed — threshold: below it the crop starts to suffer.", ov_read_topsoil: "Brown squares — moisture of the top few cm from satellite (faded = unreliable for this field).", ov_read_green: "Thin green line — canopy greenness (NDVI); a drop means harvest, disease or drought.", ov_read_bars: "Bars at the bottom (right axis, mm) — rain and irrigation.", ov_read_alarms: "Triangles at the top — satellite alarms (red = confirmed, yellow = awaiting the advisor).", ov_read_bands: "Background: red 0–30% dry, yellow 30–60% moderate, green above 60% moist.", ov_balance_err: "Balance temporarily unavailable (no weather data) — try later.", ov_l_check: "field moisture check", ov_check_tip: "Field check: profile approx. {v}% full", ov_estimate: "estimate", ov_read_estimate: "Dotted, fainter part of the blue line — estimate: the result still depends on the soil state at the start of the balance (1 March, from the ERA5-Land model). It ends after rain or irrigation that fully refills the profile, or after a field moisture check.", ov_read_check: "White diamonds — field moisture check (advisor or farmer); the balance is set to this value.", ov_season_from: "Balance since {d}.", ov_init_era5: "Starting soil state from the ERA5-Land model.", ov_init_full: "Starting soil state assumed full (no ERA5-Land data).", ov_est_until: "Until {d} the result is an estimate (dotted line).", ov_est_all: "The whole result is an estimate — since the start there has been no rain or irrigation that fully refilled the profile. A field moisture check will ground it.", sc_h: "Field soil moisture check", sc_note: "sets the water balance on the day of the check — no meter needed, the “feel” method", sc_level: "A handful of soil from root depth (approx. 20–30 cm):", sc_level_wet: "wet — water / mud squeezes out (full profile)", sc_level_moist: "forms a firm, pliable ball, stains fingers (approx. 87%)", sc_level_medium: "forms a ball that crumbles when pressed (approx. 62%)", sc_level_dry: "forms a weak ball that falls apart, does not stain fingers (approx. 37%)", sc_level_very_dry: "dry, loose or hard, will not form a ball (approx. 12%)", sc_pct_ph: "or % from a sensor", sc_depth_ph: "depth cm", sc_none: "No checks.", sc_err: "Enter the date and the assessment.", sc_src_farmer_panel: "farmer", sc_src_manual: "advisor", sa_h: "Salinity and groundwater", sa_src_class: "class", sa_src_ec_paste: "ECe measurement", sa_src_ec_1_5: "EC 1:5 measurement", sa_src_ec_water: "from water EC", sa_line_effect: "Salinity ECe {ece} dS/m ({src}) — above the crop threshold ({thr} dS/m): plants take up about {less}% less water, yield about {loss}% lower (FAO-56).", sa_line_ok: "Salinity ECe {ece} dS/m ({src}) — below the crop threshold ({thr} dS/m), no effect on the balance.", sa_none: "No salinity data — the balance assumes non-saline soil.", sa_crop_unknown: "Crop unknown — 4 dS/m threshold assumed.", sa_gw_shallow: "Shallow groundwater ({m} m): capillary rise is not yet modelled — the balance may overstate irrigation needs; risk of secondary salinisation.", sa_hint_farmer_crust: "Farmer reports salt crusts ({d}) — measure EC or set the salinity class.", sa_hint_farmer_leaching: "Farmer reports winter leaching ({m3} m³/ha) — the field is probably saline; set the class.", sa_cls_lbl: "Salinity class", sa_cls_unknown: "no data", sa_cls_none: "non-saline (<2 dS/m)", sa_cls_slight: "slightly (2–4 dS/m)", sa_cls_moderate: "moderately (4–8 dS/m)", sa_cls_strong: "strongly (8–16 dS/m)", sa_cls_very_strong: "very strongly (>16 dS/m)", sa_gw_lbl: "Groundwater depth [m]", sa_gw_ph: "empty = unknown", sa_ec_lbl: "Or EC measurement [dS/m = mS/cm]", sa_m_lbl: "Measurement type", sa_m_ec_1_5: "1:5 soil:water extract", sa_m_ece: "ECe (saturated paste, lab)", sa_m_ec_water: "irrigation water EC", sa_ec_hint: "A measurement overrides the class. EC 1:5 is converted to ECe by soil texture (×6–15); water EC ×1.5.", tex_sand: "sand", tex_loamy_sand: "loamy sand", tex_sandy_loam: "sandy loam", tex_loam: "loam", tex_silt_loam: "silt loam (loess)", tex_silt: "silt", tex_sandy_clay_loam: "sandy clay loam", tex_clay_loam: "clay loam", tex_silty_clay_loam: "silty clay loam", tex_sandy_clay: "sandy clay", tex_silty_clay: "silty clay", tex_clay: "clay", sw_h: "Soil water holding capacity", sw_src_soilgrids: "SoilGrids soil map, 250 m", sw_src_texture_field: "soil texture from the field", sw_line: "{taw} mm = {awc} mm/m × {zr} m roots ({src}: {tex}).", sw_line_manual: "{taw} mm — entered by the advisor.", sw_line_default: "{taw} mm — assumption (no soil data).", sw_root_limited: "Roots limited by soil depth.", sw_crop_unknown: "Crop unknown — 1 m roots assumed.", sw_check_field: "Check the soil texture in the field.", sw_auto: "automatic (soil map)", sw_texture_lbl: "Soil texture (from the field)", sw_root_lbl: "Soil depth / root barrier [cm]", sw_root_ph: "empty = no limit", sw_taw_lbl: "Or enter the water holding capacity directly [mm] (e.g. from a soil test)", sw_taw_ph: "empty = calculated automatically", sw_save: "Save", sw_refresh: "Fetch soil map again", sw_sg_profile: "SoilGrids soil map (root zone): sand {s}%, clay {c}%.", sw_sg_err: "SoilGrids soil map temporarily unavailable — will retry later.", sw_how_h: "How to determine soil texture in the field (ribbon test, 2 minutes)", sw_how_1: "Does not stain fingers, will not form a ball — sand.", sw_how_2: "Slightly stains, the ball falls apart — loamy sand.", sw_how_3: "Forms a ball, a roll thicker than 3 mm cracks — sandy loam (gritty) or silt loam (floury).", sw_how_4: "A ~3 mm roll cracks when bent into a ring — loam or silty clay loam (silky, sticky).", sw_how_5: "A 1–2 mm roll bends into a ring, shiny when rubbed — clay loam or clay.", sw_how_feel: "Gritty = lots of sand; floury, silky = lots of silt; sticky and shiny = lots of clay. Moisten the sample to a plasticine-like consistency.", soil_coarse: "coarse (sand)", soil_medium: "medium", soil_medium_fine: "medium-fine", soil_fine: "fine (clay)", soil_very_fine: "very fine", soil_organic: "organic", w_bal_init: "Balance start {d}: profile approx. {p}% full ({src}).", w_bal_init_era5: "from the ERA5-Land model, soil {soil}", w_bal_init_full: "assumed", w_bal_anchor: "Since {d} the result no longer depends on the starting state.", w_bal_lowconf_era5: "Estimate: since the start there has been no rain or irrigation that fully refilled the profile — the result depends on the ERA5-Land starting state. A field moisture check will ground it.",
+    ov_loading: "Collecting data from all sources…", ov_overall_good: "No water shortage", ov_overall_watch: "Watch — first sign of water shortage", ov_overall_possible: "Possible water shortage", ov_overall_confirmed: "Water shortage — confirmed by several sources", ov_overall_conflict: "Sources disagree — check the irrigation log", ov_overall_no_data: "Not enough data to assess", ov_agree_ok: "None of the {of} available sources shows a water shortage.", ov_agree_problem: "{n} of {of} available sources show a water shortage.", ov_what_now: "What now:", ov_action_irrigate: "irrigate by {date}, approx. {mm} mm ({m3} m³/ha).", ov_action_check_irrigation: "check the field and the irrigation system — the crop signals lack of water.", ov_action_rainfed: "rainfed field — monitor; consider practices that reduce evaporation.", ov_action_none: "nothing to do.", ov_action_watch: "monitor — check again after the next satellite overpass.", ov_action_log_water: "if there was irrigation or leaching not in the log — add it and the balance will catch up.", ov_conflict_unlogged_water: "The balance model counts the soil as dry, but the satellite sees it moist (OPTRAM {w}). Most often this is water missing from the log: irrigation, leaching or rain the model did not catch.", ov_conflict_not_water: "The soil has enough water but the crop looks poor — the cause may be something other than drought (disease, pests, fertilisation, harvest).", ov_src_soil: "Soil water (balance)", ov_src_plants: "Crop (Sentinel-2)", ov_src_topsoil: "Topsoil (OPTRAM)", ov_src_weather: "Weather", ov_st_ok: "fine", ov_st_warn: "caution", ov_st_bad: "problem", ov_st_none: "not assessed", ov_as_of: "data from {d}", ov_how_soil: "rain, evaporation and logged irrigation", ov_how_plants: "leaf greenness and moisture from satellite", ov_how_topsoil: "top few cm of soil from satellite", ov_how_canopy_temp: "crops with water are cooler", ov_how_weather: "7-day forecast and last 30 days", ov_soil_ok: "Enough water ({left_pct}% of capacity); per the forecast it will last {days} days.", ov_soil_soon: "{left_pct}% of water left; stress threshold {when} ({date}).", ov_soil_approach: "Soil water running low — {left_pct}% of capacity left.", ov_soil_stress: "Crop under water stress — {used} mm used, threshold is {raw} mm.", ov_soil_no_data: "No weather data to compute the balance.", ov_plants_ok: "Green canopy (NDVI {ndvi}), no signs of drying.", ov_plants_low_cover: "Too little crop to assess the canopy (NDVI {ndvi}) — e.g. after harvest or before emergence.", ov_plants_no_data: "No recent cloud-free satellite image.", ov_plants_alarm: "Satellite sees drying: {risk} — {triage}.", ov_topsoil_moist: "Topsoil moist ({pct}%).", ov_topsoil_dry: "Topsoil dry ({pct}%).", ov_topsoil_unreliable: "Unreliable for this field (weak agreement with ERA5) — left out of the assessment.", ov_topsoil_old: "No recent measurement.", ov_topsoil_off: "Not enabled (“Moisture (OPTRAM)” button).", ov_temp_cool: "Crop is cooling itself — it has water.", ov_temp_warm: "Canopy {dt} K warmer than well-watered vegetation — possible onset of stress.", ov_temp_hot: "Canopy almost as hot as dry soil — the crop is limiting transpiration.", ov_temp_low_cover: "Too little crop to assess canopy temperature.", ov_temp_old: "No recent cloud-free scene.", ov_temp_off: "Not enabled (“Thermal (Landsat)” button).", ov_weather_normal: "Next {days} days: approx. {rain} mm rain, {et0} mm evaporation.", ov_weather_rain: "Rain expected: approx. {rain} mm in {days} days.", ov_weather_dry_hot: "Dry and hot: {rain} mm rain, up to {tmax} °C — water use will rise.", ov_weather_dry_month: "Last 30 days exceptionally dry ({pct}th percentile of the long-term record).", ov_weather_no_data: "No forecast.", ov_triage_pending: "awaiting advisor review", ov_triage_confirmed: "confirmed by advisor", ov_triage_needs_visit: "to be checked in the field", ov_triage_rejected: "rejected", ov_today: "today", ov_tomorrow: "tomorrow", ov_in_days: "in {n} days", ov_forecast: "forecast", ov_chart_h: "All sources on one chart — higher means more water", ov_range_all: "All available", ov_range_3m: "Last 3 months", ov_range_pick: "Select a period", ov_range_pick_hint: "Drag across the chart with the mouse button held down", ov_chart_empty: "No data for the chart.", ov_axis_y: "% water / condition", ov_axis_mm: "mm", ov_l_soil: "soil water", ov_l_threshold: "stress threshold", ov_l_topsoil: "topsoil (OPTRAM)", ov_unreliable: "(unreliable)", ov_l_green: "canopy greenness (NDVI)", ov_l_green_evi2: "canopy greenness (EVI2, no saturation)", ov_l_chloro: "chlorophyll (red-edge, % of season peak)", ov_irr_h: "Do satellites see the logged irrigations? Seen {s} of {n} (not seen: {x}, no data: {z})", ov_irr_h_none: "Do satellites see irrigations? Possible irrigations missing from the log", ov_irr_sig_optram: "soil (OPTRAM)", ov_irr_sig_vv: "radar", ov_irr_sig_tsi: "thermal", ov_irr_sig_ndmi: "leaf water", ov_irr_th_rain: "rain", ov_irr_tip: "before {b} ({db}) → after {a} ({da})", ov_irr_rain: "rain {mm} mm in that period — the response may come from rain", ov_irr_nodata: "no measurement just before or just after the irrigation", ov_irr_dense: "canopy", ov_irr_low: "bare", ov_irr_na_dense_canopy: "dense canopy hides the soil — this signal cannot see irrigation", ov_irr_na_low_cover: "too little vegetation — this signal is about the canopy", ov_irr_unlogged_h: "Possible irrigations missing from the log:", ov_irr_unlogged: "{a}–{b}: {s} jump with no log entry and no rain", ov_irr_sigg_optram: "soil moisture (OPTRAM)", ov_irr_sigg_tsi: "canopy cooling (thermal)", ov_irr_note: "✓ response seen, ✗ not seen despite measurements before and after, – no measurement in the window. Hover a cell for values. Working thresholds, uncalibrated; under a dense canopy only thermal and leaf water see the irrigation.", w_ev_delete: "Delete entry", w_ev_delete_confirm: "Delete the irrigation of {d}? The balance will be recalculated without it.", ov_eta_line: "Field evapotranspiration from thermal {from}–{to}: {eta} mm; from the balance: {model} mm ({pct}%).", ov_eta_agree: "Consistent with the balance.", ov_eta_lower: "The field evaporated clearly less than the balance assumes — possible water shortage or smaller irrigations than logged.", ov_eta_higher: "The field evaporated clearly more than the balance assumes — possible water missing from the log or underestimated doses.", ov_eta_approx: "Field < 3 ha — approximate (100 m thermal pixel).", ov_eta_tip: "evapotranspiration approx. {eta} mm/day (balance: {model} mm)", ov_l_leafw: "leaf water (NDMI)", ov_leafw_tip: "leaf water: {v}% (NDMI {nd})", ov_read_leafw: "Teal — leaf water (NDMI) on a scale from dry bare soil (0%) to a dense irrigated canopy (100%). The main Sentinel-2 stress signal — read it together with the purple chlorophyll line.", ov_chloro_tip: "chlorophyll: {v}% of season peak (CIred-edge {ci})", ov_res_backfill_upd: "; EVI2 and chlorophyll added to {u} older observations", ov_reason_new_indicators: "adding EVI2 and chlorophyll to history (one-off)", ov_l_rain: "rain", ov_l_irr: "irrigation", ov_l_alarm: "satellite alarm", ov_read_h: "How to read the chart", ov_read_soil: "Blue line — water left in the root zone (100% = full profile). Dashed after “today” is the forecast.", ov_read_threshold: "Red dashed — threshold: below it the crop starts to suffer.", ov_read_topsoil: "Brown squares — moisture of the top few cm from satellite (faded = unreliable for this field).", ov_read_green: "Thin green line — canopy greenness (NDVI); a drop means harvest, disease or drought.", ov_read_green_evi2: "Dark green dashed — canopy greenness from EVI2. In a dense canopy NDVI reaches ~85% and flattens, while EVI2 still shows whether the canopy is growing or weakening.", ov_read_chloro: "Purple — chlorophyll (red-edge), as % of this season's peak. Compare with the teal leaf-water line: leaves losing water while chlorophyll holds — water shortage; chlorophyll falling while leaf water holds — more likely nitrogen, disease or salinity. Uncalibrated, no thresholds.", ov_read_bars: "Bars at the bottom (right axis, mm) — rain and irrigation.", ov_read_alarms: "Triangles at the top — satellite alarms (red = confirmed, yellow = awaiting the advisor).", ov_read_bands: "Background: red 0–30% dry, yellow 30–60% moderate, green above 60% moist.", ov_balance_err: "Balance temporarily unavailable (no weather data) — try later.", ov_l_check: "field moisture check", ov_check_tip: "Field check: profile approx. {v}% full", ov_estimate: "estimate", ov_read_estimate: "Dotted, fainter part of the blue line — estimate: the result still depends on the soil state at the start of the balance (1 March, from the ERA5-Land model). It ends after rain or irrigation that fully refills the profile, or after a field moisture check.", ov_read_check: "White diamonds — field moisture check (advisor or farmer); the balance is set to this value.", ov_season_from: "Balance since {d}.", ov_init_era5: "Starting soil state from the ERA5-Land model.", ov_init_full: "Starting soil state assumed full (no ERA5-Land data).", ov_est_until: "Until {d} the result is an estimate (dotted line).", ov_est_all: "The whole result is an estimate — since the start there has been no rain or irrigation that fully refilled the profile. A field moisture check will ground it.", sc_h: "Field soil moisture check", sc_note: "sets the water balance on the day of the check — no meter needed, the “feel” method", sc_level: "A handful of soil from root depth (approx. 20–30 cm):", sc_level_wet: "wet — water / mud squeezes out (full profile)", sc_level_moist: "forms a firm, pliable ball, stains fingers (approx. 87%)", sc_level_medium: "forms a ball that crumbles when pressed (approx. 62%)", sc_level_dry: "forms a weak ball that falls apart, does not stain fingers (approx. 37%)", sc_level_very_dry: "dry, loose or hard, will not form a ball (approx. 12%)", sc_pct_ph: "or % from a sensor", sc_depth_ph: "depth cm", sc_none: "No checks.", sc_err: "Enter the date and the assessment.", sc_src_farmer_panel: "farmer", sc_src_manual: "advisor", sa_h: "Salinity and groundwater", sa_src_class: "class", sa_src_ec_paste: "ECe measurement", sa_src_ec_1_5: "EC 1:5 measurement", sa_src_ec_water: "from water EC", sa_line_effect: "Salinity ECe {ece} dS/m ({src}) — above the crop threshold ({thr} dS/m): plants take up about {less}% less water, yield about {loss}% lower (FAO-56).", sa_line_ok: "Salinity ECe {ece} dS/m ({src}) — below the crop threshold ({thr} dS/m), no effect on the balance.", sa_none: "No salinity data — the balance assumes non-saline soil.", sa_crop_unknown: "Crop unknown — 4 dS/m threshold assumed.", sa_gw_shallow: "Shallow groundwater ({m} m): capillary rise is not yet modelled — the balance may overstate irrigation needs; risk of secondary salinisation.", sa_hint_farmer_crust: "Farmer reports salt crusts ({d}) — measure EC or set the salinity class.", sa_hint_sat_suspect: "Satellite: persistently weaker spots on {p}% of the field — measure EC at the points on the map below.", ss_intro: "Salinity suspicion from 6 Sentinel-2 seasons: places where the crop is weaker than the rest of the field year after year and the soil is brighter in spring (salt crusts). Shows where to measure EC.", ss_btn: "Check salinity suspicion from satellite (approx. {pu} PU)", ss_btn_again: "Recalculate (approx. {pu} PU)", ss_confirm: "Download 6 Sentinel-2 seasons for this field? Cost approx. {pu} PU, takes up to a minute.", ss_running: "downloading 6 seasons…", ss_head: "From satellite ({y}, {n} seasons with a crop): salinity suspicion on {p}% of the field", ss_too_few: "From satellite: too few seasons with a crop ({n}; {y}) — at least 3 needed.", ss_cls_3: "strong suspicion", ss_cls_2: "suspicion", ss_cls_1: "watch", ss_cls_0: "no suspicion", ss_edge: "field edge (10 m) — not assessed", ss_pts_h: "Where to measure EC (sample 0–30 cm):", ss_pt_suspect: "point {n} — suspect spot", ss_pt_control: "point K — control, best part of the field", ss_note: "Not a measurement: persistently weak spots can also be waterlogging, compaction, furrow ends, shallow soil. Compare EC at the points with the control point. Working thresholds.", sa_hint_farmer_leaching: "Farmer reports winter leaching ({m3} m³/ha) — the field is probably saline; set the class.", sa_cls_lbl: "Salinity class", sa_cls_unknown: "no data", sa_cls_none: "non-saline (<2 dS/m)", sa_cls_slight: "slightly (2–4 dS/m)", sa_cls_moderate: "moderately (4–8 dS/m)", sa_cls_strong: "strongly (8–16 dS/m)", sa_cls_very_strong: "very strongly (>16 dS/m)", sa_gw_lbl: "Groundwater depth [m]", sa_gw_ph: "empty = unknown", sa_ec_lbl: "Or EC measurement [dS/m = mS/cm]", sa_m_lbl: "Measurement type", sa_m_ec_1_5: "1:5 soil:water extract", sa_m_ece: "ECe (saturated paste, lab)", sa_m_ec_water: "irrigation water EC", sa_ec_hint: "A measurement overrides the class. EC 1:5 is converted to ECe by soil texture (×6–15); water EC ×1.5.", tex_sand: "sand", tex_loamy_sand: "loamy sand", tex_sandy_loam: "sandy loam", tex_loam: "loam", tex_silt_loam: "silt loam (loess)", tex_silt: "silt", tex_sandy_clay_loam: "sandy clay loam", tex_clay_loam: "clay loam", tex_silty_clay_loam: "silty clay loam", tex_sandy_clay: "sandy clay", tex_silty_clay: "silty clay", tex_clay: "clay", sw_h: "Soil water holding capacity", sw_src_soilgrids: "SoilGrids soil map, 250 m", sw_src_texture_field: "soil texture from the field", sw_line: "{taw} mm = {awc} mm/m × {zr} m roots ({src}: {tex}).", sw_line_manual: "{taw} mm — entered by the advisor.", sw_line_default: "{taw} mm — assumption (no soil data).", sw_root_limited: "Roots limited by soil depth.", sw_crop_unknown: "Crop unknown — 1 m roots assumed.", sw_check_field: "Check the soil texture in the field.", sw_auto: "automatic (soil map)", sw_texture_lbl: "Soil texture (from the field)", sw_root_lbl: "Soil depth / root barrier [cm]", sw_root_ph: "empty = no limit", sw_taw_lbl: "Or enter the water holding capacity directly [mm] (e.g. from a soil test)", sw_taw_ph: "empty = calculated automatically", sw_save: "Save", sw_refresh: "Fetch soil map again", sw_sg_profile: "SoilGrids soil map (root zone): sand {s}%, clay {c}%.", sw_sg_err: "SoilGrids soil map temporarily unavailable — will retry later.", sw_how_h: "How to determine soil texture in the field (ribbon test, 2 minutes)", sw_how_1: "Does not stain fingers, will not form a ball — sand.", sw_how_2: "Slightly stains, the ball falls apart — loamy sand.", sw_how_3: "Forms a ball, a roll thicker than 3 mm cracks — sandy loam (gritty) or silt loam (floury).", sw_how_4: "A ~3 mm roll cracks when bent into a ring — loam or silty clay loam (silky, sticky).", sw_how_5: "A 1–2 mm roll bends into a ring, shiny when rubbed — clay loam or clay.", sw_how_feel: "Gritty = lots of sand; floury, silky = lots of silt; sticky and shiny = lots of clay. Moisten the sample to a plasticine-like consistency.", soil_coarse: "coarse (sand)", soil_medium: "medium", soil_medium_fine: "medium-fine", soil_fine: "fine (clay)", soil_very_fine: "very fine", soil_organic: "organic", w_bal_init: "Balance start {d}: profile approx. {p}% full ({src}).", w_bal_init_era5: "from the ERA5-Land model, soil {soil}", w_bal_init_full: "assumed", w_bal_anchor: "Since {d} the result no longer depends on the starting state.", w_bal_lowconf_era5: "Estimate: since the start there has been no rain or irrigation that fully refilled the profile — the result depends on the ERA5-Land starting state. A field moisture check will ground it.",
     ov_soil_no_log: "Note: no irrigation logged in the last 3 months — the balance assumes the field was not irrigated.", ov_conflict_unlogged_water_temp: "The balance model counts the soil as dry, but thermal data show a cool, transpiring canopy — the crop has water. Irrigation is probably not being logged.",
-    ov_prep_btn: "🔄 Prepare / refresh everything", ov_more: "Details and expert tools", ov_prep_confirm: "Run the field analysis?\n\n{list}\n\nEstimated cost: approx. {pu} PU (Sentinel Hub). Takes up to 1–2 minutes.", ov_prep_nothing: "Nothing to do.", ov_prep_h: "Field analysis", ov_prep_running: "running…", ov_step_backfill: "Observation history (since season start)", ov_step_optram: "Soil moisture calibration (OPTRAM, 12 months)", ov_step_thermal: "Landsat thermal (6 months)", ov_step_check_now: "Latest satellite data", ov_reason_has_history: "skipped — history already present", ov_reason_calibrated: "skipped — already calibrated", ov_reason_has_data: "skipped — data present (refreshed in the last step)", ov_reason_small_field: "skipped — field is {ha} ha, too small for the 100 m thermal pixel", ov_reason_no_geometry: "no field outline", ov_reason_always: "", ov_reason_few_obs: "", ov_reason_season_gap: "canopy greenness since 1 March — for the water balance", ov_reason_not_calibrated: "", ov_reason_old_calibration: "", ov_reason_no_data: "", ov_res_backfill: "{n} observations added (clear scenes: {c})", ov_res_optram: "quality {q}, agreement with ERA5 r = {r}", ov_res_thermal: "cloud-free scenes over the field: {n}", ov_res_check_fresh: "new observation fetched", ov_res_check_none: "no new clear scene — latest data kept",
+    ov_prep_btn: "🔄 Prepare / refresh everything", ov_more: "Details and expert tools", ov_prep_confirm: "Run the field analysis?\n\n{list}\n\nEstimated cost: approx. {pu} PU (Sentinel Hub). Takes up to 1–2 minutes.", ov_prep_nothing: "Nothing to do.", ov_prep_h: "Field analysis", ov_prep_running: "running…", ov_step_backfill: "Observation history (since season start)", ov_step_optram: "Soil moisture calibration (OPTRAM, 12 months)", ov_step_thermal: "Landsat thermal (since season start)", ov_step_thermal_refresh: "Landsat thermal — new scenes", ov_step_optram_refresh: "OPTRAM soil moisture — new scenes", ov_step_soil: "Soil water capacity (SoilGrids)", ov_step_check_now: "Latest satellite data", ov_reason_has_history: "skipped — history complete, the last step fetches the newest scenes", ov_reason_stale: "gap since {from}", ov_reason_calibrated: "calibrated — fetching new scenes", ov_reason_poor_calibration: "skipped — calibration came out poor, OPTRAM is not reliable on this field", ov_reason_has_data: "", ov_reason_small_field: "field is {ha} ha — the 100 m thermal pixel mixes with surroundings, approximate result", ov_reason_soil_soilgrids: "skipped — SoilGrids capacity already present ({mm} mm)", ov_reason_soil_manual: "skipped — capacity entered manually ({mm} mm)", ov_reason_soil_texture_field: "skipped — capacity from field soil texture ({mm} mm)", ov_reason_soil_default: "the balance currently assumes 100 mm", ov_reason_no_geometry: "no field outline", ov_reason_always: "", ov_reason_few_obs: "", ov_reason_season_gap: "canopy greenness since 1 March — for the water balance", ov_reason_not_calibrated: "", ov_reason_old_calibration: "", ov_reason_no_data: "", ov_res_backfill: "{n} observations added (clear scenes: {c})", ov_res_optram: "quality {q}, agreement with ERA5 r = {r}", ov_res_thermal: "cloud-free scenes over the field: {n}", ov_res_check_fresh: "new observation fetched", ov_res_check_none: "no new clear scene — latest data kept", ov_res_optram_refresh: "new scenes: {n}", ov_res_soil: "{mm} mm of available water in the root zone", ov_res_soil_default: "the balance uses {mm} mm",
     ov_cool_tip1: "field {f} °C · best-watered fields nearby {c} °C · dry soil {h} °C", ov_cool_tip2: "= {v}% → {verdict}", ov_cool_yes: "the crop has water", ov_cool_mid: "possible onset of water shortage", ov_cool_no: "the crop is short of water or sparse",
     ov_l_cooling: "does the crop have water? (canopy temperature)", ov_src_canopy_temp: "Does the crop have water? (canopy temperature)", ov_read_cooling: "Orange triangles — whether the crop has water, judging by its temperature from the Landsat satellite. A crop with water transpires and cools itself like a sweating person; without water it stops transpiring and heats up — often days before it turns yellow. 100% = as cool as the best-watered fields nearby, 0% = as hot as dry bare soil. Shown only when a crop is growing.",
     y_inner: "(analysed {ha} ha — excluding a 10 m border strip where pixels mix with roads and margins)", ov_action_weather_watch: "the field is fine, but the forecast is dry or hot — check again in a few days.",
@@ -7461,9 +8076,9 @@ const EXTRA_I18N = {
     op_btn: "Umidità (OPTRAM)", op_title: "Umidità dello strato superficiale da satellite (OPTRAM)", op_intro: "OPTRAM stima l’umidità da quanto suolo e vegetazione appaiono scuri nell’infrarosso a onde corte (Sentinel-2, banda B12): l’acqua assorbe questa luce. I pixel dell’area intorno al campo in molte date formano un trapezio nel grafico NDVI × STR — il bordo inferiore è lo stato più secco, quello superiore il più umido a parità di copertura vegetale. La posizione del campo tra i bordi dà l’umidità relativa W da 0 (secco) a 1 (bagnato).", op_caveats: "W è relativa, non in % volumetrica. Riguarda i primi centimetri e, con chioma fitta (NDVI > 0,6), soprattutto l’acqua nelle piante. Il trapezio è stimato su un’area di ~1,5 km intorno al campo — ricalibrare dopo un cambio di stagione o grandi cambi di colture nei dintorni. È un contesto per il verdetto e il bilancio idrico, non un allarme separato.", op_months: "ultimi {n} mesi", op_calibrate: "Calibra il trapezio", op_recalibrate: "Ricalibra", op_calibrating: "Calcolo… (fino a 2 min)", op_calib_cost: "una richiesta Process API (fino a 60 scene) + una Statistical API", op_no_series: "Nessuna osservazione pulita del campo nel periodo di calibrazione.", op_pct: "{p}° percentile dei valori del campo", op_cls_dry: "secco", op_cls_mid: "moderatamente umido", op_cls_wet: "umido", op_dense: "Chioma fitta — il valore riflette soprattutto l’acqua nelle piante.", op_quality: "Qualità della calibrazione", op_q_good: "buona", op_q_limited: "limitata", op_q_poor: "inaffidabile", op_calib_info: "periodo {from} – {to}, {s} scene, {px} pixel", op_era5: "Accordo con l’umidità del suolo ERA5-Land 0–7 cm: r = {r} ({n} date comuni).", op_era5_good: "— buono, calibrazione affidabile.", op_era5_mid: "— moderato.", op_era5_bad: "— debole, usare W con cautela.", op_era5_none: "Troppe poche date in comune con ERA5-Land per il confronto (esegui “Controlla ora” o la riproduzione storica).", op_chart_trap: "Trapezio: pixel dell’area, bordi secco e umido, campo (arancione)", op_chart_series: "Umidità W del campo nel tempo ed ERA5-Land 0–7 cm", op_pixels: "pixel dell’area", op_edge_dry: "bordo secco", op_edge_wet: "bordo umido", op_field: "campo", op_era5_label: "ERA5-Land 0–7 cm", op_refresh: "Scarica ultimi 45 giorni", op_delete: "Elimina calibrazione", op_delete_confirm: "Eliminare la calibrazione OPTRAM e la serie di umidità di questo campo?", op_how: "Come funziona e limiti",
     th_btn: "Termico (Landsat)", th_title: "Termico Landsat 8/9 — stress idrico dalla temperatura della coltura", th_intro: "Una coltura con acqua disponibile si raffredda con la traspirazione; quando l’acqua manca chiude gli stomi e si scalda — spesso giorni prima del calo di NDVI/NDMI. Confrontiamo la temperatura del campo con la vegetazione fitta più fresca (ben irrigata) e il suolo nudo più caldo entro ~1,5 km nella stessa scena. Indice di stress termico TSI: 0 = fresco come la vegetazione meglio irrigata, 1 = caldo come suolo secco.", th_caveats: "Copernicus Data Space offre Landsat solo al livello 1 (dal 2021): la temperatura superficiale è approssimata (emissività da NDVI, senza correzione atmosferica), quindi i °C sono indicativi — il TSI è relativo nella scena e non ne risente. Il pixel termico è di 100 m: sotto ~3 ha il risultato si mescola con i dintorni. Passaggio ~10:30–11:00, ogni ~8 giorni (L8+L9), solo cielo sereno. In inverno e inizio primavera manca vegetazione fitta nei dintorni = niente TSI.", th_fetch: "Scarica dati termici", th_fetch_again: "Scarica di nuovo", th_cost: "una richiesta Process API (fino a 60 scene)", th_small: "Il campo ha {ha} ha — il pixel termico Landsat è di 100 m, il risultato si mescolerà con i dintorni.", th_cls_ok: "la coltura si raffredda traspirando", th_cls_mid: "possibile inizio di stress", th_cls_high: "probabile stress idrico o copertura scarsa", th_no_ref: "Nessuna vegetazione fitta o suolo nudo nei dintorni in questa scena — TSI non calcolabile.", th_latest: "Scena {d}: campo ≈ {t} °C · vegetazione più fresca ≈ {c} °C · suolo più caldo ≈ {h} °C · NDVI campo {n}", th_spread: "Differenza di temperatura nel campo (p90−p10): {k} K — irrigazione forse non uniforme.", th_low_cover: "Copertura scarsa — la temperatura riflette soprattutto il suolo.", th_n: "Scene senza nuvole sul campo: {n}", th_tsi: "TSI (stress termico)", th_t_field: "campo °C", th_t_cold: "vegetazione fresca °C", th_t_hot: "suolo caldo °C", th_delete: "Elimina dati termici", th_delete_confirm: "Eliminare le scene termiche salvate per questo campo?", th_source: "Landsat 8/9 (USGS/NASA) tramite Copernicus Data Space",
     bc_h: "Biomassa e azoto della cover crop — calibrazione su campioni di campo (CIred-edge)", bc_intro: "L’attuale modello di biomassa deriva dalla letteratura sul mais. CIred-edge (B07/B05 − 1) cresce linearmente con clorofilla e azoto della coltura e non satura nelle cover crop rigogliose — ma non esistono coefficienti pubblicati per le miscele polacche. Inserisci i campioni delle visite (quadrati, taglio, pesata): l’app trova la scena Sentinel-2 pulita più vicina, confronta i modelli e permette di approvare un modello sui tuoi dati.", bc_proto_h: "Come prelevare un campione", bc_proto_1: "Tempistica: entro 5 giorni da un passaggio Sentinel-2 senza nuvole (idealmente lo stesso giorno). L’app trova da sola la scena pulita più vicina.", bc_proto_2: "4 quadrati da 0,25 m² (50×50 cm) in punti tipici del campo, ad almeno 20 m dal bordo; non scegliere i punti migliori o peggiori.", bc_proto_3: "Tagliare tutta la biomassa aerea a livello del suolo e pesare la massa fresca di ogni quadrato (media in grammi).", bc_proto_4: "Sostanza secca: essiccare un sottocampione a 60–65 °C fino a peso costante (~48 h) o usare la % di s.s. tabellare per la specie; N — da analisi di laboratorio (% N sulla s.s.), facoltativo.", bc_proto_5: "Campiona campi con vigore diverso — da scarsi a molto rigogliosi. Il modello si può approvare da 8 campioni ed è affidabile da circa 15.", bc_f_parcel: "ID particella (ULDK)", bc_f_date: "Data campione", bc_f_mix: "Miscela / specie", bc_f_frames: "Numero di quadrati", bc_f_frame_m2: "Area quadrato (m²)", bc_f_fresh: "Massa fresca — media per quadrato (g)", bc_f_dmpct: "Sostanza secca (% della fresca)", bc_f_dm: "oppure direttamente: sostanza secca (t/ha)", bc_f_npct: "N nella sostanza secca (%, facoltativo)", bc_add: "Aggiungi campione", bc_calc: "= {dm} t s.s./ha", bc_calc_n: "{n} kg N/ha", bc_missing: "Inserisci ID particella, data e massa (fresca con % s.s. o secca t/ha).", bc_matching: "Cerco una scena Sentinel-2…", bc_added_ok: "Aggiunto. Scena {d}, CIre {c}.", bc_added_nomatch: "Aggiunto, ma senza scena pulita entro ±5 giorni — il campione non entra nell’adattamento (riprova “Abbina scena” più tardi).", bc_empty: "Nessun campione.", bc_col_parcel: "Particella", bc_col_dm: "Sostanza secca t/ha", bc_col_scene: "Scena S2", bc_rematch: "Abbina scena", bc_rematch_fail: "errore — riprova più tardi", bc_delete_confirm: "Eliminare questo campione?", bc_active: "Modello in uso:", bc_target_dm: "biomassa", bc_target_n: "asportazione N", bc_lit_model: "da letteratura (EVI+NDRE+RVI, mais)", bc_clear: "Torna alla letteratura", bc_clear_confirm: "Ritirare il modello calibrato? Le stime torneranno al modello da letteratura.", bc_fit_h: "Adattamento su {n} campioni con scena abbinata", bc_col_model: "Modello", bc_rmse_cv: "errore di validazione incrociata", bc_linear: "lineare", bc_cmp_hint: "Errore di validazione incrociata: ogni campione è previsto da un modello adattato sugli altri — misura onesta dell’errore su un campo nuovo. Più basso è meglio.", bc_apply_dm: "Approva modello biomassa", bc_apply_n: "Approva modello azoto", bc_apply_dm_confirm: "Approvare il modello di biomassa da CIre? D’ora in poi le stime di biomassa (anche quelle salvate nel monitoraggio) useranno questo modello.", bc_apply_n_confirm: "Approvare il modello di asportazione N da CIre?", bc_applied: "Approvato. Osservazioni salvate ricalcolate: {n}.", bc_samples: "campioni", bc_fit_line: "adattamento", bc_n_line: "N nella biomassa: {lo}–{hi} kg/ha", bc_src_field: "modello calibrato su campioni di campo", bc_src_lit: "modello da letteratura (non calibrato su cover crop)", bc_extrap: "CIre fuori dall’intervallo dei campioni — estrapolazione",
-    ov_loading: "Raccolgo i dati da tutte le fonti…", ov_overall_good: "L’acqua non manca", ov_overall_watch: "Da osservare — primo segnale di carenza idrica", ov_overall_possible: "Possibile carenza idrica", ov_overall_confirmed: "Carenza idrica — confermata da più fonti", ov_overall_conflict: "Le fonti non concordano — controlla il registro irriguo", ov_overall_no_data: "Dati insufficienti per la valutazione", ov_agree_ok: "Nessuna delle {of} fonti disponibili mostra carenza idrica.", ov_agree_problem: "{n} delle {of} fonti disponibili mostrano carenza idrica.", ov_what_now: "Cosa fare:", ov_action_irrigate: "irrigare entro il {date}, circa {mm} mm ({m3} m³/ha).", ov_action_check_irrigation: "controllare il campo e l’impianto irriguo — la coltura segnala mancanza d’acqua.", ov_action_rainfed: "campo non irriguo — osservare; valutare pratiche che riducono l’evaporazione.", ov_action_none: "nessuna azione necessaria.", ov_action_watch: "osservare — ricontrollare dopo il prossimo passaggio del satellite.", ov_action_log_water: "se c’è stata un’irrigazione o un dilavamento non registrato — inseriscilo e il bilancio si allineerà.", ov_conflict_unlogged_water: "Il modello di bilancio considera il suolo secco, ma il satellite lo vede umido (OPTRAM {w}). Di solito è acqua non registrata: irrigazione, dilavamento o pioggia non colta dal modello.", ov_conflict_not_water: "Nel suolo l’acqua non manca ma la coltura appare sofferente — la causa può essere diversa dalla siccità (malattie, parassiti, concimazione, raccolta).", ov_src_soil: "Acqua nel suolo (bilancio)", ov_src_plants: "Coltura (Sentinel-2)", ov_src_topsoil: "Strato superficiale (OPTRAM)", ov_src_weather: "Meteo", ov_st_ok: "a posto", ov_st_warn: "attenzione", ov_st_bad: "problema", ov_st_none: "non valutato", ov_as_of: "dati del {d}", ov_how_soil: "pioggia, evaporazione e irrigazioni registrate", ov_how_plants: "verde e umidità delle foglie da satellite", ov_how_topsoil: "primi cm di suolo da satellite", ov_how_canopy_temp: "le piante con acqua sono più fresche", ov_how_weather: "previsione 7 giorni e ultimi 30 giorni", ov_soil_ok: "Acqua sufficiente ({left_pct}% della capacità); secondo la previsione basterà per {days} giorni.", ov_soil_soon: "Resta il {left_pct}% dell’acqua; soglia di stress {when} ({date}).", ov_soil_approach: "L’acqua nel suolo sta finendo — resta il {left_pct}% della capacità.", ov_soil_stress: "Coltura in stress idrico — consumati {used} mm, la soglia è {raw} mm.", ov_soil_no_data: "Nessun dato meteo per calcolare il bilancio.", ov_plants_ok: "Chioma verde (NDVI {ndvi}), nessun segno di disseccamento.", ov_plants_low_cover: "Troppa poca coltura per valutare la chioma (NDVI {ndvi}) — es. dopo la raccolta o prima dell’emergenza.", ov_plants_no_data: "Nessuna immagine satellitare recente senza nuvole.", ov_plants_alarm: "Il satellite vede disseccamento: {risk} — {triage}.", ov_topsoil_moist: "Superficie del suolo umida ({pct}%).", ov_topsoil_dry: "Superficie del suolo secca ({pct}%).", ov_topsoil_unreliable: "Risultato incerto per questo campo (scarso accordo con ERA5) — escluso dalla valutazione.", ov_topsoil_old: "Nessuna misura recente.", ov_topsoil_off: "Non attivato (pulsante “Umidità (OPTRAM)”).", ov_temp_cool: "La coltura si raffredda — ha acqua.", ov_temp_warm: "Chioma più calda di {dt} K rispetto alla vegetazione ben irrigata — possibile inizio di stress.", ov_temp_hot: "Chioma calda quasi come suolo secco — la coltura limita la traspirazione.", ov_temp_low_cover: "Troppa poca coltura per valutare la temperatura.", ov_temp_old: "Nessuna scena recente senza nuvole.", ov_temp_off: "Non attivato (pulsante “Termico (Landsat)”).", ov_weather_normal: "Prossimi {days} giorni: circa {rain} mm di pioggia, evaporazione {et0} mm.", ov_weather_rain: "Pioggia prevista: circa {rain} mm in {days} giorni.", ov_weather_dry_hot: "Secco e caldo: {rain} mm di pioggia, fino a {tmax} °C — il consumo d’acqua aumenterà.", ov_weather_dry_month: "Ultimi 30 giorni eccezionalmente secchi ({pct}° percentile del lungo periodo).", ov_weather_no_data: "Nessuna previsione.", ov_triage_pending: "in attesa del consulente", ov_triage_confirmed: "confermato dal consulente", ov_triage_needs_visit: "da verificare in campo", ov_triage_rejected: "respinto", ov_today: "oggi", ov_tomorrow: "domani", ov_in_days: "tra {n} giorni", ov_forecast: "previsione", ov_chart_h: "Tutte le fonti in un grafico — più in alto significa più acqua", ov_chart_empty: "Nessun dato per il grafico.", ov_axis_y: "% acqua / condizione", ov_axis_mm: "mm", ov_l_soil: "acqua nel suolo", ov_l_threshold: "soglia di stress", ov_l_topsoil: "superficie (OPTRAM)", ov_unreliable: "(incerto)", ov_l_green: "verde della chioma (NDVI)", ov_l_rain: "pioggia", ov_l_irr: "irrigazione", ov_l_alarm: "allarme satellitare", ov_read_h: "Come leggere il grafico", ov_read_soil: "Linea blu — acqua rimasta nella zona radicale (100% = profilo pieno). Tratteggiata dopo “oggi” è la previsione.", ov_read_threshold: "Rossa tratteggiata — soglia: sotto di essa la coltura inizia a soffrire.", ov_read_topsoil: "Quadrati marroni — umidità dei primi cm da satellite (sbiaditi = incerti per questo campo).", ov_read_green: "Linea verde sottile — verde della chioma (NDVI); un calo indica raccolta, malattia o siccità.", ov_read_bars: "Barre in basso (asse destro, mm) — pioggia e irrigazioni.", ov_read_alarms: "Triangoli in alto — allarmi satellitari (rossi = confermati, gialli = in attesa del consulente).", ov_read_bands: "Sfondo: rosso 0–30% secco, giallo 30–60% moderato, verde oltre 60% umido.", ov_balance_err: "Bilancio momentaneamente non disponibile (mancano dati meteo) — riprova più tardi.", ov_l_check: "verifica umidità in campo", ov_check_tip: "Verifica in campo: profilo pieno circa al {v}%", ov_estimate: "stima", ov_read_estimate: "Tratto punteggiato e più chiaro della linea blu — stima: il risultato dipende ancora dallo stato del suolo all’inizio del bilancio (1° marzo, dal modello ERA5-Land). Finisce dopo una pioggia o un’irrigazione che riempie del tutto il profilo, o dopo una verifica in campo.", ov_read_check: "Rombi bianchi — verifica dell’umidità in campo (consulente o agricoltore); il bilancio si allinea a questo valore.", ov_season_from: "Bilancio dal {d}.", ov_init_era5: "Stato iniziale del suolo dal modello ERA5-Land.", ov_init_full: "Stato iniziale del suolo ipotizzato pieno (mancano dati ERA5-Land).", ov_est_until: "Fino al {d} il risultato è una stima (linea punteggiata).", ov_est_all: "Tutto il risultato è una stima — dall’inizio non c’è stata pioggia o irrigazione che riempisse del tutto il profilo. Una verifica in campo lo renderà affidabile.", sc_h: "Verifica dell’umidità del suolo in campo", sc_note: "imposta il bilancio idrico nel giorno della verifica — senza strumenti, metodo “al tatto”", sc_level: "Una manciata di suolo dalla profondità delle radici (circa 20–30 cm):", sc_level_wet: "bagnato — strizzando esce acqua / fango (profilo pieno)", sc_level_moist: "forma una pallina compatta e plastica, sporca le dita (circa 87%)", sc_level_medium: "forma una pallina che si sbriciola alla pressione (circa 62%)", sc_level_dry: "forma una pallina debole che si sfalda, non sporca le dita (circa 37%)", sc_level_very_dry: "secco, sciolto o duro, non forma la pallina (circa 12%)", sc_pct_ph: "oppure % da sensore", sc_depth_ph: "prof. cm", sc_none: "Nessuna verifica.", sc_err: "Inserisci data e valutazione.", sc_src_farmer_panel: "agricoltore", sc_src_manual: "consulente", sa_h: "Salinità e falda", sa_src_class: "classe", sa_src_ec_paste: "misura ECe", sa_src_ec_1_5: "misura EC 1:5", sa_src_ec_water: "da EC dell’acqua", sa_line_effect: "Salinità ECe {ece} dS/m ({src}) — sopra la soglia della coltura ({thr} dS/m): le piante assorbono circa il {less}% di acqua in meno, resa più bassa di circa il {loss}% (FAO-56).", sa_line_ok: "Salinità ECe {ece} dS/m ({src}) — sotto la soglia della coltura ({thr} dS/m), nessun effetto sul bilancio.", sa_none: "Nessun dato sulla salinità — il bilancio presume suolo non salino.", sa_crop_unknown: "Coltura sconosciuta — soglia ipotizzata 4 dS/m.", sa_gw_shallow: "Falda superficiale ({m} m): la risalita capillare non è ancora calcolata — il bilancio può sovrastimare il fabbisogno irriguo; rischio di salinizzazione secondaria.", sa_hint_farmer_crust: "L’agricoltore segnala croste saline ({d}) — misura l’EC o imposta la classe.", sa_hint_farmer_leaching: "L’agricoltore indica il lavaggio invernale ({m3} m³/ha) — il campo è probabilmente salino; imposta la classe.", sa_cls_lbl: "Classe di salinità", sa_cls_unknown: "nessun dato", sa_cls_none: "non salino (<2 dS/m)", sa_cls_slight: "leggermente (2–4 dS/m)", sa_cls_moderate: "moderatamente (4–8 dS/m)", sa_cls_strong: "fortemente (8–16 dS/m)", sa_cls_very_strong: "molto fortemente (>16 dS/m)", sa_gw_lbl: "Profondità della falda [m]", sa_gw_ph: "vuoto = sconosciuta", sa_ec_lbl: "Oppure misura EC [dS/m = mS/cm]", sa_m_lbl: "Tipo di misura", sa_m_ec_1_5: "estratto suolo:acqua 1:5", sa_m_ece: "ECe (pasta satura, laboratorio)", sa_m_ec_water: "EC dell’acqua irrigua", sa_ec_hint: "La misura prevale sulla classe. EC 1:5 convertita in ECe secondo la tessitura (×6–15); EC dell’acqua ×1,5.", tex_sand: "sabbia", tex_loamy_sand: "sabbia franca", tex_sandy_loam: "franco sabbioso", tex_loam: "franco", tex_silt_loam: "franco limoso (loess)", tex_silt: "limo", tex_sandy_clay_loam: "franco sabbioso argilloso", tex_clay_loam: "franco argilloso", tex_silty_clay_loam: "franco limoso argilloso", tex_sandy_clay: "argilla sabbiosa", tex_silty_clay: "argilla limosa", tex_clay: "argilla", sw_h: "Capacità idrica del suolo", sw_src_soilgrids: "mappa dei suoli SoilGrids, 250 m", sw_src_texture_field: "tessitura rilevata in campo", sw_line: "{taw} mm = {awc} mm/m × {zr} m di radici ({src}: {tex}).", sw_line_manual: "{taw} mm — inserito dal consulente.", sw_line_default: "{taw} mm — ipotesi (mancano dati sul suolo).", sw_root_limited: "Radici limitate dalla profondità del suolo.", sw_crop_unknown: "Coltura sconosciuta — ipotizzato 1 m di radici.", sw_check_field: "Verifica la tessitura in campo.", sw_auto: "automatico (mappa dei suoli)", sw_texture_lbl: "Tessitura (dal campo)", sw_root_lbl: "Profondità del suolo / ostacolo alle radici [cm]", sw_root_ph: "vuoto = nessun limite", sw_taw_lbl: "Oppure inserisci la capacità idrica direttamente [mm] (es. da analisi del suolo)", sw_taw_ph: "vuoto = calcolata automaticamente", sw_save: "Salva", sw_refresh: "Scarica di nuovo la mappa dei suoli", sw_sg_profile: "Mappa SoilGrids (zona radicale): sabbia {s}%, argilla {c}%.", sw_sg_err: "Mappa SoilGrids momentaneamente non disponibile — riproveremo più tardi.", sw_how_h: "Come determinare la tessitura in campo (prova del cordoncino, 2 minuti)", sw_how_1: "Non sporca le dita, non forma la pallina — sabbia.", sw_how_2: "Sporca poco, la pallina si sfalda — sabbia franca.", sw_how_3: "Forma la pallina, un cordoncino più spesso di 3 mm si spezza — franco sabbioso (ruvido) o franco limoso (farinoso).", sw_how_4: "Un cordoncino di ~3 mm si spezza piegandolo ad anello — franco o franco limoso argilloso (setoso, appiccicoso).", sw_how_5: "Un cordoncino di 1–2 mm si piega ad anello, lucido se strofinato — franco argilloso o argilla.", sw_how_feel: "Ruvido = molta sabbia; farinoso, setoso = molto limo; appiccicoso e lucido = molta argilla. Inumidisci il campione fino alla consistenza della plastilina.", soil_coarse: "grossolano (sabbia)", soil_medium: "medio", soil_medium_fine: "medio-fine", soil_fine: "fine (argilla)", soil_very_fine: "molto fine", soil_organic: "organico", w_bal_init: "Inizio bilancio {d}: profilo pieno circa al {p}% ({src}).", w_bal_init_era5: "dal modello ERA5-Land, suolo {soil}", w_bal_init_full: "ipotizzato", w_bal_anchor: "Dal {d} il risultato non dipende più dallo stato iniziale.", w_bal_lowconf_era5: "Stima: dall’inizio del bilancio non c’è stata pioggia o irrigazione che riempisse del tutto il profilo — il risultato dipende dallo stato iniziale ERA5-Land. Una verifica in campo lo renderà affidabile.",
+    ov_loading: "Raccolgo i dati da tutte le fonti…", ov_overall_good: "L’acqua non manca", ov_overall_watch: "Da osservare — primo segnale di carenza idrica", ov_overall_possible: "Possibile carenza idrica", ov_overall_confirmed: "Carenza idrica — confermata da più fonti", ov_overall_conflict: "Le fonti non concordano — controlla il registro irriguo", ov_overall_no_data: "Dati insufficienti per la valutazione", ov_agree_ok: "Nessuna delle {of} fonti disponibili mostra carenza idrica.", ov_agree_problem: "{n} delle {of} fonti disponibili mostrano carenza idrica.", ov_what_now: "Cosa fare:", ov_action_irrigate: "irrigare entro il {date}, circa {mm} mm ({m3} m³/ha).", ov_action_check_irrigation: "controllare il campo e l’impianto irriguo — la coltura segnala mancanza d’acqua.", ov_action_rainfed: "campo non irriguo — osservare; valutare pratiche che riducono l’evaporazione.", ov_action_none: "nessuna azione necessaria.", ov_action_watch: "osservare — ricontrollare dopo il prossimo passaggio del satellite.", ov_action_log_water: "se c’è stata un’irrigazione o un dilavamento non registrato — inseriscilo e il bilancio si allineerà.", ov_conflict_unlogged_water: "Il modello di bilancio considera il suolo secco, ma il satellite lo vede umido (OPTRAM {w}). Di solito è acqua non registrata: irrigazione, dilavamento o pioggia non colta dal modello.", ov_conflict_not_water: "Nel suolo l’acqua non manca ma la coltura appare sofferente — la causa può essere diversa dalla siccità (malattie, parassiti, concimazione, raccolta).", ov_src_soil: "Acqua nel suolo (bilancio)", ov_src_plants: "Coltura (Sentinel-2)", ov_src_topsoil: "Strato superficiale (OPTRAM)", ov_src_weather: "Meteo", ov_st_ok: "a posto", ov_st_warn: "attenzione", ov_st_bad: "problema", ov_st_none: "non valutato", ov_as_of: "dati del {d}", ov_how_soil: "pioggia, evaporazione e irrigazioni registrate", ov_how_plants: "verde e umidità delle foglie da satellite", ov_how_topsoil: "primi cm di suolo da satellite", ov_how_canopy_temp: "le piante con acqua sono più fresche", ov_how_weather: "previsione 7 giorni e ultimi 30 giorni", ov_soil_ok: "Acqua sufficiente ({left_pct}% della capacità); secondo la previsione basterà per {days} giorni.", ov_soil_soon: "Resta il {left_pct}% dell’acqua; soglia di stress {when} ({date}).", ov_soil_approach: "L’acqua nel suolo sta finendo — resta il {left_pct}% della capacità.", ov_soil_stress: "Coltura in stress idrico — consumati {used} mm, la soglia è {raw} mm.", ov_soil_no_data: "Nessun dato meteo per calcolare il bilancio.", ov_plants_ok: "Chioma verde (NDVI {ndvi}), nessun segno di disseccamento.", ov_plants_low_cover: "Troppa poca coltura per valutare la chioma (NDVI {ndvi}) — es. dopo la raccolta o prima dell’emergenza.", ov_plants_no_data: "Nessuna immagine satellitare recente senza nuvole.", ov_plants_alarm: "Il satellite vede disseccamento: {risk} — {triage}.", ov_topsoil_moist: "Superficie del suolo umida ({pct}%).", ov_topsoil_dry: "Superficie del suolo secca ({pct}%).", ov_topsoil_unreliable: "Risultato incerto per questo campo (scarso accordo con ERA5) — escluso dalla valutazione.", ov_topsoil_old: "Nessuna misura recente.", ov_topsoil_off: "Non attivato (pulsante “Umidità (OPTRAM)”).", ov_temp_cool: "La coltura si raffredda — ha acqua.", ov_temp_warm: "Chioma più calda di {dt} K rispetto alla vegetazione ben irrigata — possibile inizio di stress.", ov_temp_hot: "Chioma calda quasi come suolo secco — la coltura limita la traspirazione.", ov_temp_low_cover: "Troppa poca coltura per valutare la temperatura.", ov_temp_old: "Nessuna scena recente senza nuvole.", ov_temp_off: "Non attivato (pulsante “Termico (Landsat)”).", ov_weather_normal: "Prossimi {days} giorni: circa {rain} mm di pioggia, evaporazione {et0} mm.", ov_weather_rain: "Pioggia prevista: circa {rain} mm in {days} giorni.", ov_weather_dry_hot: "Secco e caldo: {rain} mm di pioggia, fino a {tmax} °C — il consumo d’acqua aumenterà.", ov_weather_dry_month: "Ultimi 30 giorni eccezionalmente secchi ({pct}° percentile del lungo periodo).", ov_weather_no_data: "Nessuna previsione.", ov_triage_pending: "in attesa del consulente", ov_triage_confirmed: "confermato dal consulente", ov_triage_needs_visit: "da verificare in campo", ov_triage_rejected: "respinto", ov_today: "oggi", ov_tomorrow: "domani", ov_in_days: "tra {n} giorni", ov_forecast: "previsione", ov_chart_h: "Tutte le fonti in un grafico — più in alto significa più acqua", ov_range_all: "Tutto il periodo", ov_range_3m: "Ultimi 3 mesi", ov_range_pick: "Seleziona periodo", ov_range_pick_hint: "Trascina sul grafico con il pulsante del mouse premuto", ov_chart_empty: "Nessun dato per il grafico.", ov_axis_y: "% acqua / condizione", ov_axis_mm: "mm", ov_l_soil: "acqua nel suolo", ov_l_threshold: "soglia di stress", ov_l_topsoil: "superficie (OPTRAM)", ov_unreliable: "(incerto)", ov_l_green: "verde della chioma (NDVI)", ov_l_green_evi2: "verde della chioma (EVI2, senza saturazione)", ov_l_chloro: "clorofilla (red-edge, % del picco stagionale)", ov_irr_h: "I satelliti vedono le irrigazioni registrate? Visibili {s} su {n} (non visibili: {x}, senza dati: {z})", ov_irr_h_none: "I satelliti vedono le irrigazioni? Possibili irrigazioni non registrate", ov_irr_sig_optram: "suolo (OPTRAM)", ov_irr_sig_vv: "radar", ov_irr_sig_tsi: "termico", ov_irr_sig_ndmi: "acqua nelle foglie", ov_irr_th_rain: "pioggia", ov_irr_tip: "prima {b} ({db}) → dopo {a} ({da})", ov_irr_rain: "pioggia di {mm} mm nel periodo — la risposta può venire dalla pioggia", ov_irr_nodata: "nessuna misura subito prima o subito dopo l’irrigazione", ov_irr_dense: "chioma", ov_irr_low: "nudo", ov_irr_na_dense_canopy: "la chioma fitta nasconde il suolo — questo segnale non vede l’irrigazione", ov_irr_na_low_cover: "troppa poca vegetazione — il segnale riguarda la chioma", ov_irr_unlogged_h: "Possibili irrigazioni non registrate:", ov_irr_unlogged: "{a}–{b}: salto di {s} senza voce nel registro e senza pioggia", ov_irr_sigg_optram: "umidità del suolo (OPTRAM)", ov_irr_sigg_tsi: "raffreddamento della chioma (termico)", ov_irr_note: "✓ risposta visibile, ✗ non visibile pur con misure prima e dopo, – nessuna misura nella finestra. Passa sopra una cella per i valori. Soglie provvisorie, non calibrate; con chioma fitta l’irrigazione la vedono solo il termico e l’acqua nelle foglie.", w_ev_delete: "Elimina voce", w_ev_delete_confirm: "Eliminare l’irrigazione del {d}? Il bilancio verrà ricalcolato senza di essa.", ov_eta_line: "Evapotraspirazione del campo dal termico {from}–{to}: {eta} mm; dal bilancio: {model} mm ({pct}%).", ov_eta_agree: "Coerente con il bilancio.", ov_eta_lower: "Il campo ha evapotraspirato molto meno di quanto assume il bilancio — possibile carenza idrica o irrigazioni minori di quelle registrate.", ov_eta_higher: "Il campo ha evapotraspirato molto più di quanto assume il bilancio — possibile acqua non registrata o dosi sottostimate.", ov_eta_approx: "Campo < 3 ha — approssimato (pixel termico da 100 m).", ov_eta_tip: "evapotraspirazione circa {eta} mm/giorno (bilancio: {model} mm)", ov_l_leafw: "acqua nelle foglie (NDMI)", ov_leafw_tip: "acqua nelle foglie: {v}% (NDMI {nd})", ov_read_leafw: "Turchese — acqua nelle foglie (NDMI) su una scala da suolo nudo e secco (0%) a chioma fitta e irrigata (100%). È il principale segnale di stress da Sentinel-2 — leggila insieme alla linea viola della clorofilla.", ov_chloro_tip: "clorofilla: {v}% del picco stagionale (CIred-edge {ci})", ov_res_backfill_upd: "; EVI2 e clorofilla aggiunti a {u} osservazioni precedenti", ov_reason_new_indicators: "aggiunta di EVI2 e clorofilla allo storico (una tantum)", ov_l_rain: "pioggia", ov_l_irr: "irrigazione", ov_l_alarm: "allarme satellitare", ov_read_h: "Come leggere il grafico", ov_read_soil: "Linea blu — acqua rimasta nella zona radicale (100% = profilo pieno). Tratteggiata dopo “oggi” è la previsione.", ov_read_threshold: "Rossa tratteggiata — soglia: sotto di essa la coltura inizia a soffrire.", ov_read_topsoil: "Quadrati marroni — umidità dei primi cm da satellite (sbiaditi = incerti per questo campo).", ov_read_green: "Linea verde sottile — verde della chioma (NDVI); un calo indica raccolta, malattia o siccità.", ov_read_green_evi2: "Verde scuro tratteggiata — verde della chioma da EVI2. Con chioma fitta l’NDVI arriva a ~85% e si appiattisce, mentre l’EVI2 mostra ancora se la chioma cresce o si indebolisce.", ov_read_chloro: "Viola — clorofilla (red-edge), in % del picco di questa stagione. Confrontala con la linea turchese dell’acqua nelle foglie: foglie che perdono acqua e clorofilla stabile — manca acqua; clorofilla in calo e acqua nelle foglie stabile — più probabilmente azoto, malattia o salinità. Non calibrato, senza soglie.", ov_read_bars: "Barre in basso (asse destro, mm) — pioggia e irrigazioni.", ov_read_alarms: "Triangoli in alto — allarmi satellitari (rossi = confermati, gialli = in attesa del consulente).", ov_read_bands: "Sfondo: rosso 0–30% secco, giallo 30–60% moderato, verde oltre 60% umido.", ov_balance_err: "Bilancio momentaneamente non disponibile (mancano dati meteo) — riprova più tardi.", ov_l_check: "verifica umidità in campo", ov_check_tip: "Verifica in campo: profilo pieno circa al {v}%", ov_estimate: "stima", ov_read_estimate: "Tratto punteggiato e più chiaro della linea blu — stima: il risultato dipende ancora dallo stato del suolo all’inizio del bilancio (1° marzo, dal modello ERA5-Land). Finisce dopo una pioggia o un’irrigazione che riempie del tutto il profilo, o dopo una verifica in campo.", ov_read_check: "Rombi bianchi — verifica dell’umidità in campo (consulente o agricoltore); il bilancio si allinea a questo valore.", ov_season_from: "Bilancio dal {d}.", ov_init_era5: "Stato iniziale del suolo dal modello ERA5-Land.", ov_init_full: "Stato iniziale del suolo ipotizzato pieno (mancano dati ERA5-Land).", ov_est_until: "Fino al {d} il risultato è una stima (linea punteggiata).", ov_est_all: "Tutto il risultato è una stima — dall’inizio non c’è stata pioggia o irrigazione che riempisse del tutto il profilo. Una verifica in campo lo renderà affidabile.", sc_h: "Verifica dell’umidità del suolo in campo", sc_note: "imposta il bilancio idrico nel giorno della verifica — senza strumenti, metodo “al tatto”", sc_level: "Una manciata di suolo dalla profondità delle radici (circa 20–30 cm):", sc_level_wet: "bagnato — strizzando esce acqua / fango (profilo pieno)", sc_level_moist: "forma una pallina compatta e plastica, sporca le dita (circa 87%)", sc_level_medium: "forma una pallina che si sbriciola alla pressione (circa 62%)", sc_level_dry: "forma una pallina debole che si sfalda, non sporca le dita (circa 37%)", sc_level_very_dry: "secco, sciolto o duro, non forma la pallina (circa 12%)", sc_pct_ph: "oppure % da sensore", sc_depth_ph: "prof. cm", sc_none: "Nessuna verifica.", sc_err: "Inserisci data e valutazione.", sc_src_farmer_panel: "agricoltore", sc_src_manual: "consulente", sa_h: "Salinità e falda", sa_src_class: "classe", sa_src_ec_paste: "misura ECe", sa_src_ec_1_5: "misura EC 1:5", sa_src_ec_water: "da EC dell’acqua", sa_line_effect: "Salinità ECe {ece} dS/m ({src}) — sopra la soglia della coltura ({thr} dS/m): le piante assorbono circa il {less}% di acqua in meno, resa più bassa di circa il {loss}% (FAO-56).", sa_line_ok: "Salinità ECe {ece} dS/m ({src}) — sotto la soglia della coltura ({thr} dS/m), nessun effetto sul bilancio.", sa_none: "Nessun dato sulla salinità — il bilancio presume suolo non salino.", sa_crop_unknown: "Coltura sconosciuta — soglia ipotizzata 4 dS/m.", sa_gw_shallow: "Falda superficiale ({m} m): la risalita capillare non è ancora calcolata — il bilancio può sovrastimare il fabbisogno irriguo; rischio di salinizzazione secondaria.", sa_hint_farmer_crust: "L’agricoltore segnala croste saline ({d}) — misura l’EC o imposta la classe.", sa_hint_sat_suspect: "Satellite: zone persistentemente più deboli sul {p}% del campo — misura l’EC nei punti della mappa sotto.", ss_intro: "Sospetto di salinità da 6 stagioni Sentinel-2: zone dove la coltura è più debole del resto del campo anno dopo anno e il suolo in primavera è più chiaro (croste saline). Indica dove misurare l’EC.", ss_btn: "Verifica il sospetto di salinità da satellite (circa {pu} PU)", ss_btn_again: "Ricalcola (circa {pu} PU)", ss_confirm: "Scaricare 6 stagioni Sentinel-2 per questo campo? Costo circa {pu} PU, fino a un minuto.", ss_running: "scarico 6 stagioni…", ss_head: "Da satellite ({y}, {n} stagioni con coltura): sospetto di salinità sul {p}% del campo", ss_too_few: "Da satellite: troppe poche stagioni con coltura ({n}; {y}) — ne servono almeno 3.", ss_cls_3: "sospetto forte", ss_cls_2: "sospetto", ss_cls_1: "da osservare", ss_cls_0: "nessun sospetto", ss_edge: "bordo del campo (10 m) — non valutato", ss_pts_h: "Dove misurare l’EC (campione 0–30 cm):", ss_pt_suspect: "punto {n} — zona sospetta", ss_pt_control: "punto K — controllo, parte migliore del campo", ss_note: "Non è una misura: zone persistentemente deboli possono essere anche ristagni, compattamento, fine solco, suolo poco profondo. Confronta l’EC dei punti con il punto di controllo. Soglie provvisorie.", sa_hint_farmer_leaching: "L’agricoltore indica il lavaggio invernale ({m3} m³/ha) — il campo è probabilmente salino; imposta la classe.", sa_cls_lbl: "Classe di salinità", sa_cls_unknown: "nessun dato", sa_cls_none: "non salino (<2 dS/m)", sa_cls_slight: "leggermente (2–4 dS/m)", sa_cls_moderate: "moderatamente (4–8 dS/m)", sa_cls_strong: "fortemente (8–16 dS/m)", sa_cls_very_strong: "molto fortemente (>16 dS/m)", sa_gw_lbl: "Profondità della falda [m]", sa_gw_ph: "vuoto = sconosciuta", sa_ec_lbl: "Oppure misura EC [dS/m = mS/cm]", sa_m_lbl: "Tipo di misura", sa_m_ec_1_5: "estratto suolo:acqua 1:5", sa_m_ece: "ECe (pasta satura, laboratorio)", sa_m_ec_water: "EC dell’acqua irrigua", sa_ec_hint: "La misura prevale sulla classe. EC 1:5 convertita in ECe secondo la tessitura (×6–15); EC dell’acqua ×1,5.", tex_sand: "sabbia", tex_loamy_sand: "sabbia franca", tex_sandy_loam: "franco sabbioso", tex_loam: "franco", tex_silt_loam: "franco limoso (loess)", tex_silt: "limo", tex_sandy_clay_loam: "franco sabbioso argilloso", tex_clay_loam: "franco argilloso", tex_silty_clay_loam: "franco limoso argilloso", tex_sandy_clay: "argilla sabbiosa", tex_silty_clay: "argilla limosa", tex_clay: "argilla", sw_h: "Capacità idrica del suolo", sw_src_soilgrids: "mappa dei suoli SoilGrids, 250 m", sw_src_texture_field: "tessitura rilevata in campo", sw_line: "{taw} mm = {awc} mm/m × {zr} m di radici ({src}: {tex}).", sw_line_manual: "{taw} mm — inserito dal consulente.", sw_line_default: "{taw} mm — ipotesi (mancano dati sul suolo).", sw_root_limited: "Radici limitate dalla profondità del suolo.", sw_crop_unknown: "Coltura sconosciuta — ipotizzato 1 m di radici.", sw_check_field: "Verifica la tessitura in campo.", sw_auto: "automatico (mappa dei suoli)", sw_texture_lbl: "Tessitura (dal campo)", sw_root_lbl: "Profondità del suolo / ostacolo alle radici [cm]", sw_root_ph: "vuoto = nessun limite", sw_taw_lbl: "Oppure inserisci la capacità idrica direttamente [mm] (es. da analisi del suolo)", sw_taw_ph: "vuoto = calcolata automaticamente", sw_save: "Salva", sw_refresh: "Scarica di nuovo la mappa dei suoli", sw_sg_profile: "Mappa SoilGrids (zona radicale): sabbia {s}%, argilla {c}%.", sw_sg_err: "Mappa SoilGrids momentaneamente non disponibile — riproveremo più tardi.", sw_how_h: "Come determinare la tessitura in campo (prova del cordoncino, 2 minuti)", sw_how_1: "Non sporca le dita, non forma la pallina — sabbia.", sw_how_2: "Sporca poco, la pallina si sfalda — sabbia franca.", sw_how_3: "Forma la pallina, un cordoncino più spesso di 3 mm si spezza — franco sabbioso (ruvido) o franco limoso (farinoso).", sw_how_4: "Un cordoncino di ~3 mm si spezza piegandolo ad anello — franco o franco limoso argilloso (setoso, appiccicoso).", sw_how_5: "Un cordoncino di 1–2 mm si piega ad anello, lucido se strofinato — franco argilloso o argilla.", sw_how_feel: "Ruvido = molta sabbia; farinoso, setoso = molto limo; appiccicoso e lucido = molta argilla. Inumidisci il campione fino alla consistenza della plastilina.", soil_coarse: "grossolano (sabbia)", soil_medium: "medio", soil_medium_fine: "medio-fine", soil_fine: "fine (argilla)", soil_very_fine: "molto fine", soil_organic: "organico", w_bal_init: "Inizio bilancio {d}: profilo pieno circa al {p}% ({src}).", w_bal_init_era5: "dal modello ERA5-Land, suolo {soil}", w_bal_init_full: "ipotizzato", w_bal_anchor: "Dal {d} il risultato non dipende più dallo stato iniziale.", w_bal_lowconf_era5: "Stima: dall’inizio del bilancio non c’è stata pioggia o irrigazione che riempisse del tutto il profilo — il risultato dipende dallo stato iniziale ERA5-Land. Una verifica in campo lo renderà affidabile.",
     ov_soil_no_log: "Nota: nessuna irrigazione registrata negli ultimi 3 mesi — il bilancio presume che il campo non sia stato irrigato.", ov_conflict_unlogged_water_temp: "Il modello di bilancio considera il suolo secco, ma il termico mostra una chioma fresca che traspira — la coltura ha acqua. Probabilmente le irrigazioni non vengono registrate.",
-    ov_prep_btn: "🔄 Prepara / aggiorna tutto", ov_more: "Dettagli e strumenti per esperti", ov_prep_confirm: "Avviare l’analisi del campo?\n\n{list}\n\nCosto stimato: circa {pu} PU (Sentinel Hub). Richiede fino a 1–2 minuti.", ov_prep_nothing: "Niente da fare.", ov_prep_h: "Analisi del campo", ov_prep_running: "in corso…", ov_step_backfill: "Storico osservazioni (da inizio stagione)", ov_step_optram: "Calibrazione umidità del suolo (OPTRAM, 12 mesi)", ov_step_thermal: "Termico Landsat (6 mesi)", ov_step_check_now: "Dati satellitari più recenti", ov_reason_has_history: "saltato — storico già presente", ov_reason_calibrated: "saltato — già calibrato", ov_reason_has_data: "saltato — dati presenti (aggiornati nell’ultimo passo)", ov_reason_small_field: "saltato — campo di {ha} ha, troppo piccolo per il pixel termico da 100 m", ov_reason_no_geometry: "nessun contorno del campo", ov_reason_always: "", ov_reason_few_obs: "", ov_reason_season_gap: "verde della coltura dal 1° marzo — per il bilancio idrico", ov_reason_not_calibrated: "", ov_reason_old_calibration: "", ov_reason_no_data: "", ov_res_backfill: "aggiunte {n} osservazioni (scene pulite: {c})", ov_res_optram: "qualità {q}, accordo con ERA5 r = {r}", ov_res_thermal: "scene senza nuvole sul campo: {n}", ov_res_check_fresh: "nuova osservazione scaricata", ov_res_check_none: "nessuna nuova scena pulita — restano gli ultimi dati",
+    ov_prep_btn: "🔄 Prepara / aggiorna tutto", ov_more: "Dettagli e strumenti per esperti", ov_prep_confirm: "Avviare l’analisi del campo?\n\n{list}\n\nCosto stimato: circa {pu} PU (Sentinel Hub). Richiede fino a 1–2 minuti.", ov_prep_nothing: "Niente da fare.", ov_prep_h: "Analisi del campo", ov_prep_running: "in corso…", ov_step_backfill: "Storico osservazioni (da inizio stagione)", ov_step_optram: "Calibrazione umidità del suolo (OPTRAM, 12 mesi)", ov_step_thermal: "Termico Landsat (da inizio stagione)", ov_step_thermal_refresh: "Termico Landsat — nuove scene", ov_step_optram_refresh: "Umidità del suolo OPTRAM — nuove scene", ov_step_soil: "Capacità idrica del suolo (SoilGrids)", ov_step_check_now: "Dati satellitari più recenti", ov_reason_has_history: "saltato — storico completo, l’ultimo passo scarica le scene più recenti", ov_reason_stale: "lacuna dal {from}", ov_reason_calibrated: "calibrato — scarica le nuove scene", ov_reason_poor_calibration: "saltato — calibrazione scarsa, OPTRAM non affidabile su questo campo", ov_reason_has_data: "", ov_reason_small_field: "campo di {ha} ha — il pixel termico da 100 m si mescola con i dintorni, risultato approssimato", ov_reason_soil_soilgrids: "saltato — capacità SoilGrids già presente ({mm} mm)", ov_reason_soil_manual: "saltato — capacità inserita a mano ({mm} mm)", ov_reason_soil_texture_field: "saltato — capacità dalla tessitura rilevata in campo ({mm} mm)", ov_reason_soil_default: "il bilancio ora assume 100 mm", ov_reason_no_geometry: "nessun contorno del campo", ov_reason_always: "", ov_reason_few_obs: "", ov_reason_season_gap: "verde della coltura dal 1° marzo — per il bilancio idrico", ov_reason_not_calibrated: "", ov_reason_old_calibration: "", ov_reason_no_data: "", ov_res_backfill: "aggiunte {n} osservazioni (scene pulite: {c})", ov_res_optram: "qualità {q}, accordo con ERA5 r = {r}", ov_res_thermal: "scene senza nuvole sul campo: {n}", ov_res_check_fresh: "nuova osservazione scaricata", ov_res_check_none: "nessuna nuova scena pulita — restano gli ultimi dati", ov_res_optram_refresh: "nuove scene: {n}", ov_res_soil: "{mm} mm di acqua disponibile nella zona radicale", ov_res_soil_default: "il bilancio usa {mm} mm",
     ov_cool_tip1: "campo {f} °C · campi meglio irrigati vicini {c} °C · suolo secco {h} °C", ov_cool_tip2: "= {v}% → {verdict}", ov_cool_yes: "la coltura ha acqua", ov_cool_mid: "possibile inizio di carenza idrica", ov_cool_no: "la coltura soffre la sete o è rada",
     ov_l_cooling: "la coltura ha acqua? (temperatura della chioma)", ov_src_canopy_temp: "La coltura ha acqua? (temperatura della chioma)", ov_read_cooling: "Triangoli arancioni — se la coltura ha acqua, a giudicare dalla sua temperatura dal satellite Landsat. Una pianta con acqua traspira e si raffredda come una persona che suda; senz’acqua smette di traspirare e si scalda — spesso giorni prima di ingiallire. 100% = fresca come i campi meglio irrigati nei dintorni, 0% = calda come suolo nudo e secco. Mostrato solo quando c’è una coltura.",
     y_inner: "(analizzati {ha} ha — esclusa una fascia di 10 m lungo il confine, dove i pixel si mescolano con strade e capezzagne)", ov_action_weather_watch: "il campo è a posto, ma la previsione è secca o calda — ricontrolla tra qualche giorno.",

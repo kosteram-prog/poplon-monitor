@@ -31,6 +31,7 @@ from photo_handler import router as photo_router
 from calibration import router as calibration_router
 from irrigation_log import router as irrigation_router
 from yield_api import router as yield_router
+from yield_multi_api import router as yield_multi_router
 from farmer_panel import router as farmer_router
 from biomass_calibration import router as biomass_router
 
@@ -103,6 +104,7 @@ app.include_router(photo_router)
 app.include_router(calibration_router)
 app.include_router(irrigation_router)
 app.include_router(yield_router)
+app.include_router(yield_multi_router)
 app.include_router(farmer_router)
 app.include_router(biomass_router)
 

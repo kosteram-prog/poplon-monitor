@@ -155,3 +155,13 @@ def test_api_water_field_patch_zmienia_uprawe(app_client):
     assert r.json()["crop_type"] == "pszenica"
     assert r.json()["region"] == "Samarkand"  # nieprzesłane pole bez zmian
     assert app_client.patch("/api/water/field/99999", json={"crop_type": "x"}).status_code == 404
+
+
+def test_usuwanie_wpisu_nawodnienia(app_client, isolated_db):
+    fid = isolated_db.add_water_field("UZ", "irrigation",
+                                      "POLYGON((66.909 39.046, 66.910 39.046, 66.910 39.047, 66.909 39.047, 66.909 39.046))")
+    ev = isolated_db.add_irrigation_event(fid, "2026-07-01", "zalewowe", amount_mm=100)
+    isolated_db.add_irrigation_event(fid, "2026-07-15", "zalewowe", amount_mm=90)
+    assert app_client.delete(f"/api/water/irrigation/{ev}").json() == {"status": "deleted"}
+    assert [e["event_date"] for e in isolated_db.get_irrigation_events(fid)] == ["2026-07-15"]
+    assert app_client.delete(f"/api/water/irrigation/{ev}").status_code == 404

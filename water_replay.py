@@ -62,16 +62,20 @@ def backfill_field(field: dict, t_start: date, t_end: date) -> dict:
     clean = [r for r in optical
              if (r.get("valid_frac") or 0.0) >= ws.WATER_MIN_VALID_FRAC and r.get("ndwi") is not None]
     existing = {o["obs_date"] for o in db.get_water_observations(field["id"])}
-    stored = 0
+    stored = updated = 0
     for opt in sorted(clean, key=lambda r: r["date"]):
         obs = ws.build_observation(field, opt, sources)
         if obs["obs_date"] in existing:
+            # obserwacja zapisana, zanim moduł liczył EVI2/red-edge — dopisz je
+            if db.fill_water_observation(field["id"], obs["obs_date"],
+                                         **{k: obs.get(k) for k in db.WATER_OBS_FILLABLE}):
+                updated += 1
             continue
         if db.add_water_observation(**obs):
             stored += 1
     if stored:
         db.update_water_field_last_checked(field["id"])
-    return {"scenes": len(optical), "clean": len(clean), "stored": stored,
+    return {"scenes": len(optical), "clean": len(clean), "stored": stored, "updated": updated,
             "radar_scenes": len(sources["radar"]), "weather_days": len(sources["weather"])}
 
 

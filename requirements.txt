@@ -13,3 +13,4 @@ attrs>=22.1
 numpy>=1.24
 reportlab>=4.0
 matplotlib>=3.8
+pyshp>=2.3

@@ -736,6 +736,9 @@ def build_observation(field: dict, opt: dict, sources: dict) -> dict:
         "ndwi_p10": opt.get("ndwi_p10"),
         "ndwi_p50": opt.get("ndwi_p50"),
         "ndwi_low_frac": opt.get("ndwi_low_frac"),
+        "evi2_mean": opt.get("evi"),      # klucz "evi" w evalscripcie to EVI2 (analytics.EVALSCRIPT_MULTI)
+        "ndre_mean": opt.get("ndre"),
+        "cire_mean": opt.get("cire"),
         "s1_rel_orbit": (sources.get("orbits") or {}).get(rad["date"]) if rad else None,
         "s1_date": rad["date"].isoformat() if rad else None,
     }

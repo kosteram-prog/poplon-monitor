@@ -1,4 +1,6 @@
 """Pojemność wodna gleby (soil_water): PTF, SoilGrids, priorytety źródeł."""
+import json
+
 import pytest
 
 import soil_water as sw
@@ -55,7 +57,7 @@ def test_fetch_soilgrids_parsowanie(monkeypatch):
 def field(isolated_db, monkeypatch):
     isolated_db.init_db()
     calls = []
-    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon: calls.append((lat, lon)) or PROFILE)
+    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon, **k: calls.append((lat, lon)) or PROFILE)
     fid = isolated_db.add_water_field("UZ", "irrigation", WKT, crop_type="bawełna")
     return isolated_db.get_water_field_by_id(fid), calls
 
@@ -93,7 +95,7 @@ def test_blad_soilgrids_nie_pyta_co_chwile(isolated_db, monkeypatch):
 
 
 def test_api_gleba(app_client, isolated_db, monkeypatch):
-    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon: PROFILE)
+    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon, **k: PROFILE)
     fid = isolated_db.add_water_field("UZ", "irrigation", WKT, crop_type="cotton")
     d = app_client.get(f"/api/water/field/{fid}/soil").json()
     assert d["source"] == "soilgrids" and len(d["classes"]) == 12 and d["attribution"]
@@ -108,7 +110,7 @@ def test_bilans_uzywa_pojemnosci_z_gleby(isolated_db, monkeypatch):
     import water_balance as wb
     import weather
     from datetime import date, timedelta
-    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon: PROFILE)
+    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon, **k: PROFILE)
     t0 = date.today()
     monkeypatch.setattr(weather, "fetch_recent_and_forecast", lambda g, past_days, forecast_days: [
         {"date": t0 - timedelta(days=past_days - i), "precip_mm": 0.0, "et0_mm": 4.0,
@@ -164,7 +166,7 @@ def test_bilans_ks_salt_zmniejsza_zuzycie():
 
 def test_api_zasolenie_i_rolnik(app_client, isolated_db, monkeypatch):
     import farmer_panel as fp
-    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon: PROFILE)
+    monkeypatch.setattr(sw, "fetch_soilgrids", lambda lat, lon, **k: PROFILE)
     fid = isolated_db.add_water_field("UZ", "irrigation", WKT, crop_type="bawełna", farmer_phone="+998 90 555 44 33")
     r = app_client.put(f"/api/water/field/{fid}/soil", json={"ec_value": 1.4, "ec_method": "ec_1_5", "gw_depth_m": 1.5})
     sa = r.json()["salinity"]
@@ -181,3 +183,40 @@ def test_api_zasolenie_i_rolnik(app_client, isolated_db, monkeypatch):
     assert row["farmer_salt_crust"] == "spots" and row["farmer_leaching_m3"] == 3000 and row["farmer_report_at"]
     assert app_client.post(f"/api/f/{tok}/field/{fid}/salt", json={"salt_crust": "lots"}).status_code == 422
     assert app_client.get(f"/api/f/{tok}").json()["fields"][0]["salt"]["farmer_leaching"] == "yes"
+
+
+def test_blad_rownoleglego_pobrania_nie_nadpisuje_profilu(isolated_db, monkeypatch):
+    """Dwa równoległe pobrania SoilGrids: jedno zapisało profil, drugie padło
+    po czasie — pole ma używać profilu i nie wisieć z komunikatem o błędzie."""
+    import soil_water
+    isolated_db.init_db()
+    fid = isolated_db.add_water_field("UZ", "irrigation",
+                                      "POLYGON((66.909 39.046, 66.910 39.046, 66.910 39.047, 66.909 39.047, 66.909 39.046))",
+                                      crop_type="cotton")
+    prof = [{"top": 0, "bottom": 200, "sand": 18, "clay": 33, "soc": 7, "cfvo": 12}]
+
+    def slow_fail(lat, lon):
+        # w trakcie tego zapytania inne zapisało już profil
+        isolated_db.save_field_soil(fid, sg_profile_json=json.dumps(prof), sg_fetched_at="2026-11-14T10:11:52")
+        raise RuntimeError("Read timed out")
+    monkeypatch.setattr(soil_water, "fetch_soilgrids", slow_fail)
+    assert soil_water._soilgrids_profile(isolated_db.get_water_field_by_id(fid), True) == prof
+    assert not (isolated_db.get_field_soil(fid) or {}).get("sg_error")
+
+
+def test_tryb_szybki_jedna_krotka_proba(isolated_db, monkeypatch):
+    """Panel nie może czekać ~90 s na SoilGrids: jedna próba, 8 s."""
+    import soil_water
+    calls = []
+
+    def fake_get(url, params=None, timeout=None):
+        calls.append(timeout)
+        raise soil_water.requests.RequestException("timeout")
+    monkeypatch.setattr(soil_water.requests, "get", fake_get)
+    monkeypatch.setattr(soil_water.time, "sleep", lambda s: calls.append(("sleep", s)))
+    monkeypatch.setattr(soil_water, "fetch_soilgrids", _REAL_FETCH)
+    isolated_db.init_db()
+    fid = isolated_db.add_water_field("UZ", "irrigation",
+                                      "POLYGON((66.909 39.046, 66.910 39.046, 66.910 39.047, 66.909 39.047, 66.909 39.046))")
+    t = soil_water.field_taw(isolated_db.get_water_field_by_id(fid), quick=True)
+    assert t["source"] == "default" and calls == [soil_water.QUICK_TIMEOUT_S]

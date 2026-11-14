@@ -120,7 +120,7 @@ def root_depth_m(crop_type: Optional[str]) -> tuple:
 # SoilGrids
 # ---------------------------------------------------------------------------
 
-def fetch_soilgrids(lat: float, lon: float, timeout: int = 40) -> list:
+def fetch_soilgrids(lat: float, lon: float, timeout: int = 40, attempts: int = 2) -> list:
     """Profil z SoilGrids: [{"top", "bottom", "sand", "clay", "om", "coarse"}]
     (procenty). Warstwy bez danych (woda, zabudowa) pomijane. Rzuca
     RuntimeError, gdy API nie odpowiada albo nie ma żadnych danych."""
@@ -128,7 +128,7 @@ def fetch_soilgrids(lat: float, lon: float, timeout: int = 40) -> list:
     params += [("property", p) for p in ("sand", "clay", "soc", "cfvo")]
     params += [("depth", d[0]) for d in SOILGRIDS_DEPTHS]
     last = None
-    for attempt in range(2):
+    for attempt in range(attempts):
         try:
             r = requests.get(SOILGRIDS_URL, params=params, timeout=timeout)
             if r.status_code == 200:
@@ -136,7 +136,8 @@ def fetch_soilgrids(lat: float, lon: float, timeout: int = 40) -> list:
             last = f"HTTP {r.status_code}: {r.text[:200]}"
         except requests.RequestException as e:
             last = str(e)
-        time.sleep(2 + 3 * attempt)
+        if attempt + 1 < attempts:
+            time.sleep(2 + 3 * attempt)
     else:
         raise RuntimeError(f"SoilGrids niedostępne: {last}")
     layers = {l["name"]: {d["label"]: d["values"].get("mean") for d in l["depths"]}
@@ -188,7 +189,12 @@ def profile_awc(profile: list, zr_m: float) -> Optional[dict]:
 # Rozstrzygnięcie dla pola
 # ---------------------------------------------------------------------------
 
-def _soilgrids_profile(field: dict, fetch: bool) -> Optional[list]:
+# Tryb szybki — wyświetlanie panelu (Pełny obraz, panel rolnika): jedna krótka
+# próba zamiast 2 × 40 s. Pełne pobieranie robi krok „Gleba” i scheduler.
+QUICK_TIMEOUT_S = 8
+
+
+def _soilgrids_profile(field: dict, fetch: bool, quick: bool = False) -> Optional[list]:
     import db
     row = db.get_field_soil(field["id"]) or {}
     if row.get("sg_profile_json"):
@@ -201,9 +207,14 @@ def _soilgrids_profile(field: dict, fetch: bool) -> Optional[list]:
     from shapely import wkt as shapely_wkt
     c = shapely_wkt.loads(field["geometry_wkt"]).representative_point()
     try:
-        prof = fetch_soilgrids(c.y, c.x)
+        prof = fetch_soilgrids(c.y, c.x, timeout=QUICK_TIMEOUT_S, attempts=1) if quick else fetch_soilgrids(c.y, c.x)
     except Exception as e:
         log.warning("SoilGrids dla pola %s: %s", field.get("id"), e)
+        # Równoległe zapytanie (np. krok „Gleba” i ładowanie panelu) mogło w tym
+        # czasie zapisać profil — wtedy błąd tego jednego zapytania nie ma znaczenia.
+        row = db.get_field_soil(field["id"]) or {}
+        if row.get("sg_profile_json"):
+            return json.loads(row["sg_profile_json"])
         db.save_field_soil(field["id"], sg_error=str(e)[:300], sg_error_at=datetime.now().isoformat(timespec="seconds"))
         return None
     db.save_field_soil(field["id"], sg_profile_json=json.dumps(prof), sg_fetched_at=datetime.now().isoformat(timespec="seconds"),
@@ -211,7 +222,7 @@ def _soilgrids_profile(field: dict, fetch: bool) -> Optional[list]:
     return prof
 
 
-def field_taw(field: dict, fetch: bool = True) -> dict:
+def field_taw(field: dict, fetch: bool = True, quick: bool = False) -> dict:
     """Pojemność wodna pola z jawnym źródłem. Klucze: taw_mm, source
     (manual | texture_field | soilgrids | default), awc_mm_m, zr_m,
     zr_limited, texture, texture_from, crop_known, root_limit_cm, sand, clay."""
@@ -225,7 +236,7 @@ def field_taw(field: dict, fetch: bool = True) -> dict:
     base = {"zr_m": round(zr, 2), "zr_limited": zr_limited, "crop_known": crop_known,
             "root_limit_cm": limit, "texture": soil.get("texture_class"), "texture_from": None,
             "awc_mm_m": None, "sand": None, "clay": None}
-    prof = _soilgrids_profile(field, fetch)
+    prof = _soilgrids_profile(field, fetch, quick)
     sg = profile_awc(prof, zr) if prof else None
     if sg:
         base.update(sand=sg["sand"], clay=sg["clay"])
@@ -279,7 +290,8 @@ EC15_TO_ECE = {
     "silty_clay": 6.0, "clay": 5.8,
 }
 ECW_TO_ECE = 1.5           # FAO-29: przy zwykłym wymywaniu ECe ≈ 1,5 × EC wody
-GW_SHALLOW_M = 2.0         # płytsze wody gruntowe: podsiąk do korzeni i ryzyko zasolenia
+GW_SHALLOW_M = 2.0
+SAT_SUSPECT_MIN_PCT = 10.0     # ≥ 10% pola w klasie „podejrzenie” z salinity_scan -> zmierz EC         # płytsze wody gruntowe: podsiąk do korzeni i ryzyko zasolenia
 EC_METHODS = ("ece", "ec_1_5", "ec_water")
 
 
@@ -317,6 +329,15 @@ def field_salinity(field: dict, soil: Optional[dict] = None, texture: Optional[s
         hints.append("farmer_leaching")
     if gw is not None and gw < GW_SHALLOW_M:
         hints.append("gw_shallow")
+    scan = None
+    try:
+        got = db.get_salinity_scan(field["id"])
+        scan = got[0] if got else None
+    except Exception:
+        scan = None
+    if scan and scan.get("status") == "ok" and (scan.get("suspect_pct") or 0) >= SAT_SUSPECT_MIN_PCT \
+            and src in ("none", "class"):
+        hints.append("sat_suspect")
     return {"ece": None if ece is None else round(ece, 1), "ece_source": src,
             "threshold": thr, "b": b, "ky": ky, "crop_known": key in SALT_TOLERANCE,
             "ks_salt": round(ks, 3), "yield_loss_pct": round(loss, 0),
@@ -325,4 +346,5 @@ def field_salinity(field: dict, soil: Optional[dict] = None, texture: Optional[s
             "gw_shallow": gw is not None and gw < GW_SHALLOW_M,
             "farmer_salt_crust": soil.get("farmer_salt_crust"), "farmer_leaching": soil.get("farmer_leaching"),
             "farmer_leaching_m3": soil.get("farmer_leaching_m3"), "farmer_report_at": soil.get("farmer_report_at"),
+            "sat_suspect_pct": (scan or {}).get("suspect_pct"),
             "hints": hints}

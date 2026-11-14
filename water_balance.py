@@ -386,11 +386,12 @@ def ndvi_points_for_field(field_id: int) -> list:
     return sorted((date.fromisoformat(d), v) for d, v in pts.items())
 
 
-def compute_field_balance(field: dict, today: Optional[date] = None) -> dict:
+def compute_field_balance(field: dict, today: Optional[date] = None, quick_soil: bool = False) -> dict:
     """Pełny bilans dla pola modułu wodnego: od początku sezonu (1 marca,
     archiwum ERA5 + prognoza 10 dni), stan początkowy z ERA5-Land, NDVI
     z obserwacji, log nawodnień, odczyty deszczomierza i punkty kontrolne.
-    Rzuca RuntimeError, gdy pogoda niedostępna."""
+    Rzuca RuntimeError, gdy pogoda niedostępna. quick_soil — wyświetlanie panelu:
+    SoilGrids najwyżej jedna 8-sekundowa próba (soil_water.QUICK_TIMEOUT_S)."""
     import db
     import weather as weather_mod
     from shapely import wkt as shapely_wkt
@@ -427,7 +428,7 @@ def compute_field_balance(field: dict, today: Optional[date] = None) -> dict:
 
     import soil_water
     kcb_max, p, crop_known = crop_params(field.get("crop_type"))
-    soil = soil_water.field_taw(field)
+    soil = soil_water.field_taw(field, quick=quick_soil)
     salt = soil_water.field_salinity(field, texture=soil.get("texture"))
     taw = float(soil["taw_mm"])
     taw_assumed = soil["source"] == "default"

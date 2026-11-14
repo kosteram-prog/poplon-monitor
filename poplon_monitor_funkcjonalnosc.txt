@@ -170,3 +170,41 @@ frameworka), wykresy przez Chart.js, wielojęzyczny interfejs (PL/EN/IT).
   - Cache pełnej analizy wielowskaźnikowej w wynikach wsadowych — karta
     szczegółów działki otwiera się natychmiast, bez ponownego przeliczania
     (bez wpływu na czas liczenia samego batcha).
+
+===============================================================================
+DOPISEK 2026-11-14 — STREFY PLONU Z WIELOLECIA + NAWOŻENIE ZMIENNĄ DAWKĄ
+===============================================================================
+Rozszerzenie modułu stref plonu (yield_mvi.py / yield_api.py) o analizę
+wieloletnią (yield_multi.py, yield_multi_api.py, yield_report.py):
+
+  - Płodozmian + plony z kilku lat (2–10): dla każdego roku liczona jest
+    WZGLĘDNA mapa plonu (MVI, okno sezonu wg uprawy danego roku); strefy
+    wyznaczane ze średniej map względnych wszystkich lat — porównywalne
+    między uprawami. Rok bez danych (chmury, brak łanu) jest pomijany
+    z ostrzeżeniem; wymagane >= 2 udane lata. Dodatkowo: stabilność
+    (międzyroczny CV piksela, udział pikseli stabilnych CV<10%).
+  - Dawka średnia nawozu [kg/ha] rozdzielana na strefy dwiema strategiami:
+    "pod potencjał" (proporcjonalnie do plonu wzgl. strefy) albo
+    "wyrównawcza" (więcej w strefach słabych); średnia ważona powierzchnią
+    = dawka zadana, zaokrąglenie do 5 kg, opcjonalne widełki min/max.
+    Dawki NIE są automatycznie korygowane o zasobność gleby (decyzja
+    agronoma) — można je przeliczać po policzeniu analizy bez nowych
+    zapytań satelitarnych.
+  - Próby glebowe: upload CSV (separator , ; tab, przecinek dziesiętny,
+    nagłówki PL/EN: pH, P2O5, K2O, Mg, próchnica, lat/lon WGS84); punkty
+    przypisywane do stref, średnie per strefa w UI i raporcie.
+  - Raport PDF (yield_report.py, czcionka DejaVu — polskie znaki): tabela
+    płodozmianu, mapki względne każdego roku, mapa stref z wielolecia,
+    tabela stref z dawkami i sumami kg, próby glebowe per strefa,
+    zastrzeżenia metodyczne. Budowany wyłącznie z policzonych plików.
+  - Plik dla siewnika/rozsiewacza: strefy z dawką jako Shapefile ZIP
+    (WGS84, atrybuty ZONE/LABEL/RATE) + GeoJSON (dawki.geojson).
+  - API: POST /api/yield/analysis (liczenie w tle, status running/done),
+    GET lista/szczegóły, POST {id}/fertilizer, POST {id}/soil (CSV),
+    GET {id}/report.pdf, GET {id}/file/{nazwa}, DELETE {id}.
+    Tabela DB: yield_analyses; pliki w uploads/yield_analyses/<id>/.
+  - UI (zakładka Strefy plonu): sekcja "Strefy z wielolecia + nawożenie
+    zmienną dawką" — edytor płodozmianu, parametry nawożenia, lista analiz
+    z odpytywaniem statusu, mapa, tabele stref/dawek/gleby, eksporty.
+    Tłumaczenia PL/EN/IT. Testy: tests/test_yield_multi.py (15 testów,
+    bez sieci). Nowa zależność: pyshp>=2.3.
