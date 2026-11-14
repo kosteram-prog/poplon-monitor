@@ -1,7 +1,6 @@
 """Scheduler monitoringu poplonów — odpytuje Sentinel Hub co 48h."""
 
 import logging
-import threading
 from datetime import date, datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler

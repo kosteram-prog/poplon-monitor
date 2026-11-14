@@ -36,6 +36,7 @@ MIN_MEAN_MVI = 0.02             # poniżej — brak wigoru w okresie (zły okres
 SIEVE_MIN_PX = 10               # strefy < 0.1 ha doklejane do sąsiednich
 HIGH_CV_PCT = 30.0              # powyżej — ostrzeżenie: mapa prawdopodobnie przesadza z różnicami
 MAX_FIELD_EXTENT_KM = 5.0
+EDGE_BUFFER_M = 10.0            # pas brzegowy pomijany (1 piksel S2)
 
 # Klasy stref względem średniego plonu pola (Y_i / Y_zgłoszony).
 ZONE_BREAKS = [0.90, 0.97, 1.03, 1.10]
@@ -107,7 +108,6 @@ def fetch_mvi_raster(geom_4326, t_start: date, t_end: date):
     """Process API -> (tablica 4×H×W float32, transform rasterio, bounds).
     Piksele poza geometrią pola = NaN (dataMask = 0)."""
     import core
-    import numpy as np
     import rasterio
     from shapely.geometry import mapping
     from sentinel1 import _post_with_retry
@@ -214,7 +214,6 @@ def zones_geojson(zones, valid, transform) -> dict:
     from rasterio.features import shapes
     from shapely.geometry import shape, mapping
     feats = []
-    px_ha = (PIXEL_M * PIXEL_M) / 10000.0
     for geom, val in shapes(zones, mask=valid, transform=transform):
         k = int(val)
         if k < 1:
@@ -229,7 +228,7 @@ def overlay_png(yld, valid, reported_yield: float) -> bytes:
     """Nakładka do mapy: kolor wg plonu względem średniej (0.7–1.3), przezroczyste tło."""
     import numpy as np
     from PIL import Image
-    rel = np.clip((yld / reported_yield - 0.7) / 0.6, 0, 1)
+    rel = np.nan_to_num(np.clip((yld / reported_yield - 0.7) / 0.6, 0, 1), nan=0.5)
     stops = [(0.0, (192, 57, 43)), (0.5, (244, 208, 63)), (1.0, (30, 123, 52))]
     rgba = np.zeros(yld.shape + (4,), dtype="uint8")
     for c in range(3):
@@ -241,7 +240,6 @@ def overlay_png(yld, valid, reported_yield: float) -> bytes:
 
 
 def write_geotiff(path: str, yld, transform):
-    import numpy as np
     import rasterio
     with rasterio.open(path, "w", driver="GTiff", height=yld.shape[0], width=yld.shape[1], count=1,
                        dtype="float32", crs="EPSG:4326", transform=transform, nodata=float("nan"),
@@ -257,7 +255,16 @@ def build_yield_map(geom_4326, reported_yield: float, t_start: date, t_end: date
     import water_geometry as wg
     wg.check_field_extent(geom_4326)
     arr, transform, bounds = fetch_mvi_raster(geom_4326, t_start, t_end)
-    inside = field_mask(geom_4326, arr.shape[1:], transform)
+    # Pas brzegowy (1 piksel) pomijany: piksele na granicy mieszają się z drogą,
+    # miedzą i sąsiednią uprawą — test na żywo (28 ha) dał czerwoną obwódkę
+    # wokół całego pola, zaniżoną średnią MVI wnętrza i sztucznie dużą strefę
+    # „< 90%”. Małe pola (po buforze < 50% powierzchni) — bez bufora.
+    import water_stress
+    inner = water_stress.inner_buffer_utm(geom_4326, EDGE_BUFFER_M)
+    inside = field_mask(inner, arr.shape[1:], transform)
+    full = field_mask(geom_4326, arr.shape[1:], transform)
+    if inside.sum() < 0.5 * full.sum():
+        inside = full
     res = disaggregate(arr, reported_yield, inside=inside)
     out_dir = os.path.join(YIELD_MAPS_DIR, str(map_id))
     os.makedirs(out_dir, exist_ok=True)
@@ -269,4 +276,6 @@ def build_yield_map(geom_4326, reported_yield: float, t_start: date, t_end: date
         f.write(overlay_png(res["yield"], res["valid"], reported_yield))
     stats = res["stats"]
     stats["bounds"] = [bounds.left, bounds.bottom, bounds.right, bounds.top]
+    # area_ha = analizowane wnętrze (bez pasa brzegowego), field_area_ha = całe pole
+    stats["field_area_ha"] = wg.area_ha(geom_4326)
     return stats

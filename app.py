@@ -503,8 +503,7 @@ class S1CheckRequest(BaseModel):
 def s1_check(req: S1CheckRequest):
     """Pobiera dane Sentinel-1 i wykrywa zdarzenia agrotechniczne dla działki."""
     try:
-        from sentinel1 import (fetch_s1_series, assess_with_sar,
-                               detect_tillage, init_s1_tables, save_s1_observations)
+        from sentinel1 import fetch_s1_series, detect_tillage
         from datetime import date as date_cls
         import core as core_mod
 
@@ -631,9 +630,7 @@ def check_multi(req: MultiCheckRequest):
     try:
         from analytics import (fetch_multi_series, compute_confidence_score,
                                estimate_biomass, detect_agro_events_fused,
-                               select_primary_index, get_season_phase,
-                               init_analytics_tables, save_multi_observation,
-                               SCORE_THRESHOLDS)
+                               get_season_phase, SCORE_THRESHOLDS)
         from datetime import date as date_cls
 
         geom, parcel_info = core.fetch_parcel_geometry(req.parcel_id)

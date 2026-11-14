@@ -415,8 +415,12 @@ _balance_lock = threading.Lock()
 def _balance_key(field: dict) -> tuple:
     ev = db.get_irrigation_events(field["id"])
     rain = db.get_rain_readings(field["id"])
-    return (field["id"], date.today().isoformat(), len(ev), len(rain),
-            field.get("crop_type"), field.get("soil_taw_mm"), field.get("sowing_date"))
+    checks = db.get_soil_checks(field["id"])
+    return (field["id"], date.today().isoformat(), len(ev), len(rain), len(checks),
+            field.get("crop_type"), field.get("soil_taw_mm"), field.get("sowing_date"),
+            tuple(sorted((k, v) for k, v in (db.get_field_soil(field["id"]) or {}).items()
+                         if k in ("texture_class", "root_limit_cm", "sg_fetched_at", "salinity_class",
+                                  "ec_value", "ec_method", "gw_depth_m"))))
 
 
 def field_balance_summary(field: dict, use_cache: bool = True) -> dict:
@@ -487,6 +491,11 @@ def auto_suggestions_job(today: Optional[date] = None) -> list:
                           date.fromisoformat(e["event_date"][:10]) >= today - timedelta(days=RECENT_IRRIGATION_DAYS)]
                 if recent:
                     continue
+                import water_overview
+                trust = water_overview.balance_trust(field, today)
+                if not trust["trusted"]:
+                    log.info(f"auto_suggestions_job: pole {field['id']} pominięte ({trust['reason']})")
+                    continue
                 summary = field_balance_summary(field, use_cache=False)
                 if not suggestion_due(summary):
                     continue
@@ -516,7 +525,7 @@ def _public_balance(s: dict) -> dict:
     keys = ("status", "as_of", "depletion_mm", "depletion_frac", "raw_mm", "taw_mm",
             "days_to_stress", "suggested_irrigation_date", "suggested_dose_mm",
             "suggested_dose_m3_ha", "initial_state_reliable", "forecast", "cwb_30d_class",
-            "cwb_30d_pct", "soil_moisture")
+            "cwb_30d_pct", "soil_moisture", "anchored_from", "season_start")
     return {k: s.get(k) for k in keys if k in s}
 
 
@@ -539,11 +548,17 @@ def farmer_view(farmer: dict, with_balance: bool = True) -> dict:
                             for e in db.get_irrigation_events(f["id"])][-5:][::-1],
             "rain": [{"date": r["reading_date"], "mm": r["precip_mm"]}
                      for r in db.get_rain_readings(f["id"])][-5:][::-1],
-            "balance": None, "balance_error": None,
+            "soil_checks": [{"date": c["check_date"], "level": c.get("level"), "fill_pct": c["fill_pct"]}
+                            for c in db.get_soil_checks(f["id"])][-3:][::-1],
+            "salt": {k: (db.get_field_soil(f["id"]) or {}).get(k) for k in
+                     ("farmer_salt_crust", "farmer_leaching", "farmer_leaching_m3", "farmer_report_at")},
+            "balance": None, "balance_error": None, "balance_note": None,
         }
         if with_balance and f.get("geometry_wkt"):
             try:
                 item["balance"] = _public_balance(field_balance_summary(f))
+                import water_overview
+                item["balance_note"] = water_overview.balance_trust(f)["reason"]
             except Exception as e:
                 log.warning(f"farmer_view: bilans pola {f['id']}: {e}")
                 item["balance_error"] = "unavailable"
@@ -597,6 +612,17 @@ class FarmerRainRequest(BaseModel):
     precip_mm: float = Field(..., ge=0, le=300)
 
 
+class FarmerSaltRequest(BaseModel):
+    salt_crust: Optional[str] = Field(None, pattern="^(none|spots|much|unknown)$")
+    leaching: Optional[str] = Field(None, pattern="^(yes|no|unknown)$")
+    leaching_m3_ha: Optional[float] = Field(None, gt=0, le=20000)
+
+
+class FarmerSoilCheckRequest(BaseModel):
+    check_date: str
+    level: str = Field(..., pattern="^(wet|moist|medium|dry|very_dry)$")
+
+
 class FarmerAckRequest(BaseModel):
     ack: str = Field(..., pattern="^(seen|will_irrigate|irrigated|disagree)$")
     note: Optional[str] = Field(None, max_length=500)
@@ -647,6 +673,37 @@ def farmer_api_rain(token: str, water_field_id: int, req: FarmerRainRequest):
     rid = db.add_rain_reading(water_field_id, req.reading_date, req.precip_mm, notes="panel rolnika")
     db.set_rain_reading_source(rid, "farmer_panel")
     return {"id": rid}
+
+
+@router.post("/api/f/{token}/field/{water_field_id}/soil_check")
+def farmer_api_soil_check(token: str, water_field_id: int, req: FarmerSoilCheckRequest):
+    """Ocena wilgotności „gleba w dłoni” od rolnika — punkt kontrolny bilansu."""
+    import water_balance
+    farmer = _farmer_or_404(token)
+    _farmer_field_or_404(farmer, water_field_id)
+    try:
+        _check_recent_date(req.check_date)
+    except ValueError as e:
+        raise HTTPException(422, str(e))
+    fill = water_balance.SOIL_FEEL_LEVELS[req.level]
+    cid = db.add_soil_check(water_field_id, req.check_date, fill, method="feel", level=req.level,
+                            source="farmer_panel")
+    return {"id": cid, "fill_pct": fill}
+
+
+@router.post("/api/f/{token}/field/{water_field_id}/salt")
+def farmer_api_salt(token: str, water_field_id: int, req: FarmerSaltRequest):
+    """Rolnik: czy widać naloty soli i czy pole było płukane zimą. Trafia do
+    doradcy jako wskazówka (soil_water.field_salinity -> hints) — nie zmienia
+    bilansu, dopóki doradca nie wpisze klasy albo pomiaru EC."""
+    from datetime import datetime
+    farmer = _farmer_or_404(token)
+    _farmer_field_or_404(farmer, water_field_id)
+    ch = req.model_dump(exclude_unset=True)
+    db.save_field_soil(water_field_id, farmer_salt_crust=ch.get("salt_crust"), farmer_leaching=ch.get("leaching"),
+                       farmer_leaching_m3=ch.get("leaching_m3_ha") if ch.get("leaching") == "yes" else None,
+                       farmer_report_at=datetime.now().isoformat(timespec="seconds"))
+    return {"status": "saved"}
 
 
 @router.post("/api/f/{token}/alarm/{alarm_id}/ack")

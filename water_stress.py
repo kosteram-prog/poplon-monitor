@@ -759,8 +759,20 @@ def fetch_and_store_observation(field: dict, lookback_days: int = LOOKBACK_DAYS)
         log.warning("Pole wodne id=%s: brak sceny z >= %.0f%% czystych pikseli w oknie %s..%s",
                     field.get("id"), WATER_MIN_VALID_FRAC * 100, t_start, t_end)
         return None
-    obs = build_observation(field, latest_opt, sources)
-    db.add_water_observation(**obs)
+    # Zapisujemy WSZYSTKIE czyste sceny z okna, których jeszcze nie ma w
+    # historii (audyt 11.2026: wcześniej tylko najnowszą — pozostałe, już
+    # opłacone w PU, przepadały, a historia do z-score była rzadsza).
+    existing = {o["obs_date"] for o in db.get_water_observations(field["id"])}
+    clean = sorted((r for r in sources["optical"]
+                    if (r.get("valid_frac") or 0.0) >= WATER_MIN_VALID_FRAC and r.get("ndwi") is not None),
+                   key=lambda r: r["date"])
+    obs = None
+    for opt in clean:
+        o = build_observation(field, opt, sources)
+        if o["obs_date"] not in existing:
+            db.add_water_observation(**o)
+        if opt is latest_opt:
+            obs = o
     db.update_water_field_last_checked(field["id"])
     return obs
 
@@ -843,6 +855,18 @@ def attach_water_balance(field: dict, verdict: dict) -> dict:
         return verdict
     verdict["water_balance"] = bal
     st = bal.get("status")
+    try:
+        import water_overview
+        trust = water_overview.balance_trust(field)
+    except Exception:
+        trust = {"trusted": True, "reason": None}
+    if not trust["trusted"]:
+        verdict["balance_untrusted"] = trust["reason"]
+        verdict["message_pl"] += (" Bilans wodny pomijamy w ocenie: " + (
+            "w dzienniku nie ma nawodnień z ostatnich 3 miesięcy, więc model zakłada, że pole nie było podlewane."
+            if trust["reason"] == "no_irrigation_log" else
+            "satelita (wilgotność wierzchnia albo temperatura łanu) pokazuje wodę, której model nie zna."))
+        return verdict
     if verdict.get("risk_flag") and verdict.get("risk_type") in (
             "water_stress_risk", "irrigation_performance_anomaly") and st == "ok":
         verdict["message_pl"] += (" Model bilansu wodnego nie wskazuje deficytu w glebie — "
@@ -897,6 +921,13 @@ def balance_alarm_decision(field: dict, verdict: dict) -> Optional[dict]:
 def record_balance_alarm_if_needed(field: dict, verdict: dict) -> Optional[int]:
     decision = balance_alarm_decision(field, verdict)
     if decision is None:
+        return None
+    import water_overview
+    trust = water_overview.balance_trust(field)
+    if not trust["trusted"]:
+        # Pole nawadniane bez dziennika albo satelita widzi wodę — bilans nie
+        # wie o nawodnieniach, więc jego „stres” nie trafia do kolejki doradcy.
+        log.info("Pole id=%s: alarm bilansowy pominięty (%s)", field.get("id"), trust["reason"])
         return None
     if db.water_alarm_exists_recent(field["id"], decision["risk_type"], days=WATER_ALARM_RECENT_DAYS):
         return None

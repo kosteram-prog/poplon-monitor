@@ -19,7 +19,7 @@ import os
 import random
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 from typing import Optional
 
 import requests

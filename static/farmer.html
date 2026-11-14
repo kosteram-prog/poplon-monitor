@@ -55,6 +55,8 @@ button.p{background:var(--accent);border-color:var(--accent);color:#fff;font-wei
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:6px 16px 14px}
 form.f{padding:4px 16px 14px;display:none}
 form.f.open{display:block}
+form.f label.opt{display:flex;gap:10px;align-items:flex-start;font-size:15px;color:var(--ink);margin:0;padding:10px;border:1px solid var(--line);border-radius:10px;margin-top:6px;cursor:pointer}
+form.f label.opt input{width:auto;margin-top:3px}
 form.f label{display:block;font-size:13px;color:var(--muted);margin:8px 0 3px}
 form.f input,form.f select{width:100%;padding:10px;border:1px solid var(--line);border-radius:10px;font-size:16px;background:var(--card);color:var(--ink)}
 .row{display:flex;gap:8px}
@@ -94,7 +96,6 @@ const L = {
     ok_horizon_rf:'Według prognozy na {n} dni zapas wody wystarczy.',
     gauge:'Zapas wody w glebie', gauge_hint:'kreska = próg, poniżej którego rośliny zaczynają cierpieć',
     fc:'Najbliższe {n} dni: deszcz {p} mm, parowanie {e} mm', fc_t:', do {t} °C', fc_hot:' — sucho i gorąco',
-    low_conf:'Mała pewność: od dawna nie było dużego deszczu ani nawodnienia, więc stan gleby jest szacowany.',
     sat:'Ostatnie zdjęcie satelitarne: {d}',
     a_balance:'Doradca: w glebie brakuje wody', a_stress:'Doradca: rośliny wykazują stres wodny (zdjęcia satelitarne)',
     a_performance:'Doradca: rośliny przesychają mimo nawadniania — sprawdź instalację',
@@ -103,11 +104,12 @@ const L = {
     a_note:'Uwaga doradcy:',
     ack_seen:'Przeczytałem', ack_will_irrigate:'Nawodnię', ack_irrigated:'Już nawodniłem', ack_disagree:'Nie zgadzam się',
     ack_done:'Twoja odpowiedź: {a}', ack_note_prompt:'Krótko: dlaczego? (opcjonalnie)',
-    btn_irr:'💧 Zapisz nawodnienie', btn_rain:'🌧 Zapisz deszcz',
+    btn_irr:'💧 Zapisz nawodnienie', btn_rain:'🌧 Zapisz deszcz', btn_soil:'🖐 Jak wilgotna gleba?', soil_q:'Weź garść gleby z głębokości korzeni (ok. 20–30 cm, łopatą) i ściśnij w dłoni. Która odpowiedź pasuje?', soil_wet:'Mokra — cieknie woda albo błoto', soil_moist:'Robi się trwała, plastyczna kulka, brudzi palce', soil_medium:'Kulka się robi, ale kruszy przy nacisku', soil_dry:'Słaba kulka, rozpada się, nie brudzi palców', soil_very_dry:'Sucha, sypka albo twarda — kulki nie ma', h_soil:'Ocena gleby {d}: {s}', soil_pick:'Zaznacz jedną odpowiedź.', low_conf_soil:'Obliczenia wody w glebie są na razie szacunkowe. Sprawdź glebę w dłoni (przycisk „Jak wilgotna gleba?”) — od razu je urealnimy.', btn_salt:'🧂 Sól na polu i płukanie', salt_q:'Czy wiosną, przed siewem, na polu widać białe naloty soli?', salt_none:'Nie ma', salt_spots:'Tak, w kilku miejscach', salt_much:'Tak, na dużej części pola', salt_unknown:'Nie wiem', leach_q:'Czy tej zimy pole było płukane (płukanie z soli)?', leach_yes:'Tak', leach_no:'Nie', leach_unknown:'Nie wiem', leach_m3:'Ile wody [m³/ha] (jeśli wiesz)', salt_pick:'Odpowiedz przynajmniej na jedno pytanie.', h_salt:'Sól: {s} · płukanie: {l}',
     f_date:'Data', f_method:'Sposób', f_amount:'Ile wody', f_unit_mm:'mm', f_unit_m3:'m³/ha', f_rain:'Deszczomierz (mm)',
     f_save:'Zapisz', f_cancel:'Anuluj', saved:'Zapisane. Dziękujemy!', err:'Błąd: ',
     meth_zalewowe:'bruzdowe / zalewowe', meth_kroplowe:'kroplowe', meth_deszczowanie:'deszczowanie',
     hist:'Ostatnie wpisy', h_irr:'Nawodnienie {d}: {a}', h_rain:'Deszcz {d}: {mm} mm', h_noamt:'bez dawki',
+    note_title:'Zapisz swoje nawodnienia', note_no_log:'Nie mamy wpisów o nawadnianiu tego pola z ostatnich 3 miesięcy, więc obliczenia zakładają, że pole nie było podlewane. Zapisz ostatnie nawodnienia przyciskiem poniżej — wtedy podpowiemy, kiedy i ile podlać.', note_sat:'Zdjęcia satelitarne pokazują wodę, której nie ma w Twoich wpisach. Zapisz ostatnie nawodnienia przyciskiem poniżej — wtedy obliczenia będą dokładne.',
     foot:'To szacunek z modelu bilansu wodnego, prognozy pogody i zdjęć satelitarnych — nie zastępuje oceny w polu. W razie wątpliwości zadzwoń do doradcy.',
   },
   en: {
@@ -122,7 +124,6 @@ const L = {
     ok_horizon:'No irrigation needed in the {n}-day forecast.', ok_horizon_rf:'Soil water should last through the {n}-day forecast.',
     gauge:'Water left in the soil', gauge_hint:'line = threshold below which the crop starts to suffer',
     fc:'Next {n} days: rain {p} mm, evaporation {e} mm', fc_t:', up to {t} °C', fc_hot:' — dry and hot',
-    low_conf:'Low certainty: no big rain or irrigation for a long time, so the soil state is estimated.',
     sat:'Latest satellite image: {d}',
     a_balance:'Advisor: the soil is short of water', a_stress:'Advisor: crop shows water stress (satellite images)',
     a_performance:'Advisor: crop is drying despite irrigation — check the system',
@@ -131,11 +132,12 @@ const L = {
     a_note:'Advisor note:',
     ack_seen:'Got it', ack_will_irrigate:'I will irrigate', ack_irrigated:'Already irrigated', ack_disagree:'I disagree',
     ack_done:'Your answer: {a}', ack_note_prompt:'Briefly: why? (optional)',
-    btn_irr:'💧 Log irrigation', btn_rain:'🌧 Log rain',
+    btn_irr:'💧 Log irrigation', btn_rain:'🌧 Log rain', btn_soil:'🖐 How moist is the soil?', soil_q:'Dig a handful of soil from root depth (about 20–30 cm) and squeeze it in your hand. Which answer fits?', soil_wet:'Wet — water or mud squeezes out', soil_moist:'Forms a firm, pliable ball, stains fingers', soil_medium:'Forms a ball that crumbles when pressed', soil_dry:'Weak ball, falls apart, does not stain fingers', soil_very_dry:'Dry, loose or hard — no ball', h_soil:'Soil check {d}: {s}', soil_pick:'Choose one answer.', low_conf_soil:'The soil water calculation is only an estimate for now. Check the soil in your hand (“How moist is the soil?” button) and we will correct it straight away.', btn_salt:'🧂 Salt on the field and leaching', salt_q:'In spring, before sowing, are there white salt crusts on the field?', salt_none:'No', salt_spots:'Yes, in a few places', salt_much:'Yes, on a large part of the field', salt_unknown:'I don’t know', leach_q:'Was the field leached this winter (washing out salts)?', leach_yes:'Yes', leach_no:'No', leach_unknown:'I don’t know', leach_m3:'How much water [m³/ha] (if you know)', salt_pick:'Answer at least one question.', h_salt:'Salt: {s} · leaching: {l}',
     f_date:'Date', f_method:'Method', f_amount:'Amount of water', f_unit_mm:'mm', f_unit_m3:'m³/ha', f_rain:'Rain gauge (mm)',
     f_save:'Save', f_cancel:'Cancel', saved:'Saved. Thank you!', err:'Error: ',
     meth_zalewowe:'furrow / flood', meth_kroplowe:'drip', meth_deszczowanie:'sprinkler',
     hist:'Recent entries', h_irr:'Irrigation {d}: {a}', h_rain:'Rain {d}: {mm} mm', h_noamt:'no amount',
+    note_title:'Please log your irrigation', note_no_log:'We have no irrigation entries for this field from the last 3 months, so the calculation assumes it was not watered. Log your recent irrigation with the button below — then we can tell you when and how much to irrigate.', note_sat:'Satellite images show water that is not in your entries. Log your recent irrigation with the button below so the calculation is accurate.',
     foot:'This is an estimate from a soil water balance model, weather forecast and satellite images — it does not replace checking the field. If in doubt, call your advisor.',
   },
   ru: {
@@ -150,7 +152,6 @@ const L = {
     ok_horizon:'По прогнозу на {n} дней полив не нужен.', ok_horizon_rf:'По прогнозу на {n} дней воды хватит.',
     gauge:'Запас воды в почве', gauge_hint:'черта = порог, ниже которого растения страдают',
     fc:'Ближайшие {n} дней: дождь {p} мм, испарение {e} мм', fc_t:', до {t} °C', fc_hot:' — сухо и жарко',
-    low_conf:'Низкая точность: давно не было сильного дождя или полива, состояние почвы оценено приблизительно.',
     sat:'Последний снимок со спутника: {d}',
     a_balance:'Агроном: в почве не хватает воды', a_stress:'Агроном: у растений водный стресс (снимки со спутника)',
     a_performance:'Агроном: растения сохнут несмотря на полив — проверьте систему',
@@ -159,11 +160,12 @@ const L = {
     a_note:'Комментарий агронома:',
     ack_seen:'Прочитал', ack_will_irrigate:'Полью', ack_irrigated:'Уже полил', ack_disagree:'Не согласен',
     ack_done:'Ваш ответ: {a}', ack_note_prompt:'Коротко: почему? (необязательно)',
-    btn_irr:'💧 Записать полив', btn_rain:'🌧 Записать дождь',
+    btn_irr:'💧 Записать полив', btn_rain:'🌧 Записать дождь', btn_soil:'🖐 Насколько влажная почва?', soil_q:'Возьмите горсть почвы с глубины корней (около 20–30 см) и сожмите в руке. Какой ответ подходит?', soil_wet:'Мокрая — вытекает вода или грязь', soil_moist:'Образует прочный пластичный комок, пачкает пальцы', soil_medium:'Комок образуется, но крошится при нажатии', soil_dry:'Слабый комок, рассыпается, пальцы не пачкает', soil_very_dry:'Сухая, рассыпчатая или твёрдая — комка нет', h_soil:'Проверка почвы {d}: {s}', soil_pick:'Выберите один ответ.', low_conf_soil:'Расчёт воды в почве пока приблизительный. Проверьте почву в руке (кнопка «Насколько влажная почва?») — и мы сразу его уточним.', btn_salt:'🧂 Соль на поле и промывка', salt_q:'Весной, до сева, видны ли на поле белые солевые налёты?', salt_none:'Нет', salt_spots:'Да, в нескольких местах', salt_much:'Да, на большой части поля', salt_unknown:'Не знаю', leach_q:'Промывали ли поле этой зимой (промывка от солей)?', leach_yes:'Да', leach_no:'Нет', leach_unknown:'Не знаю', leach_m3:'Сколько воды [м³/га] (если знаете)', salt_pick:'Ответьте хотя бы на один вопрос.', h_salt:'Соль: {s} · промывка: {l}',
     f_date:'Дата', f_method:'Способ', f_amount:'Сколько воды', f_unit_mm:'мм', f_unit_m3:'м³/га', f_rain:'Дождемер (мм)',
     f_save:'Сохранить', f_cancel:'Отмена', saved:'Сохранено. Спасибо!', err:'Ошибка: ',
     meth_zalewowe:'по бороздам / напуском', meth_kroplowe:'капельный', meth_deszczowanie:'дождевание',
     hist:'Последние записи', h_irr:'Полив {d}: {a}', h_rain:'Дождь {d}: {mm} мм', h_noamt:'без нормы',
+    note_title:'Запишите ваши поливы', note_no_log:'За последние 3 месяца нет записей о поливе этого поля, поэтому расчёт считает, что поле не поливали. Запишите последние поливы кнопкой ниже — тогда мы подскажем, когда и сколько поливать.', note_sat:'Спутник видит воду, которой нет в ваших записях. Запишите последние поливы кнопкой ниже — тогда расчёт будет точным.',
     foot:'Это оценка по модели водного баланса, прогнозу погоды и снимкам со спутника — она не заменяет осмотр поля. Если сомневаетесь, позвоните агроному.',
   },
   uz: {
@@ -178,7 +180,6 @@ const L = {
     ok_horizon:'{n} kunlik prognozga ko‘ra sug‘orish kerak emas.', ok_horizon_rf:'{n} kunlik prognozga ko‘ra suv yetadi.',
     gauge:'Tuproqdagi suv zaxirasi', gauge_hint:'chiziq = o‘simliklar qiynala boshlaydigan chegara',
     fc:'Keyingi {n} kun: yomg‘ir {p} mm, bug‘lanish {e} mm', fc_t:', {t} °C gacha', fc_hot:' — quruq va issiq',
-    low_conf:'Aniqlik past: uzoq vaqt kuchli yomg‘ir yoki sug‘orish bo‘lmagan, tuproq holati taxminiy.',
     sat:'Oxirgi sun’iy yo‘ldosh surati: {d}',
     a_balance:'Agronom: tuproqda suv yetishmayapti', a_stress:'Agronom: o‘simliklarda suv tanqisligi bor (sun’iy yo‘ldosh suratlari)',
     a_performance:'Agronom: sug‘orishga qaramay o‘simliklar qurimoqda — tizimni tekshiring',
@@ -187,11 +188,12 @@ const L = {
     a_note:'Agronom izohi:',
     ack_seen:'O‘qidim', ack_will_irrigate:'Sug‘oraman', ack_irrigated:'Sug‘ordim', ack_disagree:'Rozi emasman',
     ack_done:'Javobingiz: {a}', ack_note_prompt:'Qisqacha: nega? (ixtiyoriy)',
-    btn_irr:'💧 Sug‘orishni yozish', btn_rain:'🌧 Yomg‘irni yozish',
+    btn_irr:'💧 Sug‘orishni yozish', btn_rain:'🌧 Yomg‘irni yozish', btn_soil:'🖐 Tuproq qanchalik nam?', soil_q:'Ildiz chuqurligidan (taxminan 20–30 sm) bir hovuch tuproq olib, qo‘lda siqing. Qaysi javob mos keladi?', soil_wet:'Ho‘l — suv yoki loy oqib chiqadi', soil_moist:'Mustahkam, yumshoq kulcha bo‘ladi, barmoqni bo‘yaydi', soil_medium:'Kulcha bo‘ladi, lekin bosganda ushaladi', soil_dry:'Kulcha zaif, sochilib ketadi, barmoqni bo‘yamaydi', soil_very_dry:'Quruq, sochiluvchan yoki qattiq — kulcha bo‘lmaydi', h_soil:'Tuproq tekshiruvi {d}: {s}', soil_pick:'Bitta javobni tanlang.', low_conf_soil:'Tuproqdagi suv hisobi hozircha taxminiy. Tuproqni qo‘lda tekshiring («Tuproq qanchalik nam?» tugmasi) — hisobni darhol aniqlashtiramiz.', btn_salt:'🧂 Daladagi tuz va sho‘r yuvish', salt_q:'Bahorda, ekishdan oldin dalada oq tuz qatlamlari ko‘rinadimi?', salt_none:'Yo‘q', salt_spots:'Ha, bir necha joyda', salt_much:'Ha, dalaning katta qismida', salt_unknown:'Bilmayman', leach_q:'Bu qishda dala sho‘ri yuvildimi?', leach_yes:'Ha', leach_no:'Yo‘q', leach_unknown:'Bilmayman', leach_m3:'Qancha suv [m³/ga] (agar bilsangiz)', salt_pick:'Kamida bitta savolga javob bering.', h_salt:'Tuz: {s} · sho‘r yuvish: {l}',
     f_date:'Sana', f_method:'Usul', f_amount:'Suv miqdori', f_unit_mm:'mm', f_unit_m3:'m³/ga', f_rain:'Yomg‘ir o‘lchagich (mm)',
     f_save:'Saqlash', f_cancel:'Bekor qilish', saved:'Saqlandi. Rahmat!', err:'Xato: ',
     meth_zalewowe:'egat / bostirib', meth_kroplowe:'tomchilatib', meth_deszczowanie:'yomg‘irlatib',
     hist:'Oxirgi yozuvlar', h_irr:'Sug‘orish {d}: {a}', h_rain:'Yomg‘ir {d}: {mm} mm', h_noamt:'miqdorsiz',
+    note_title:'Sug‘orishlaringizni yozib qo‘ying', note_no_log:'Oxirgi 3 oyda bu dala sug‘orilgani haqida yozuv yo‘q, shuning uchun hisob dala sug‘orilmagan deb hisoblaydi. Oxirgi sug‘orishlarni pastdagi tugma bilan yozib qo‘ying — shunda qachon va qancha sug‘orishni aytamiz.', note_sat:'Sun’iy yo‘ldosh yozuvlaringizda yo‘q suvni ko‘rmoqda. Oxirgi sug‘orishlarni pastdagi tugma bilan yozib qo‘ying — shunda hisob aniq bo‘ladi.',
     foot:'Bu suv balansi modeli, ob-havo prognozi va sun’iy yo‘ldosh suratlari asosidagi taxmin — dalani ko‘zdan kechirish o‘rnini bosmaydi. Shubha bo‘lsa, agronomga qo‘ng‘iroq qiling.',
   },
 };
@@ -221,6 +223,12 @@ function statusBlock(f){
       ${f.balance_error ? `<div class="txt">${esc(t('st_err'))}</div>` : ''}</div>`;
   }
   if(b.status === 'no_data') return `<div class="status st-none"><div class="big">${esc(t('st_none'))}</div></div>`;
+  if(irr && f.balance_note){
+    // Obliczenia nie znają nawodnień tego pola (brak wpisów) albo satelita
+    // widzi wodę — zamiast „Nawodnij teraz” prośba o uzupełnienie dziennika.
+    return `<div class="status st-warn"><div class="big">${esc(t('note_title'))}</div>
+      <div class="txt">${esc(t(f.balance_note === 'no_irrigation_log' ? 'note_no_log' : 'note_sat'))}</div></div>`;
+  }
   const dose = b.suggested_dose_mm != null && irr
     ? `<div class="dose">${esc(t('dose', {mm:n0(b.suggested_dose_mm), m3:n0(b.suggested_dose_m3_ha)}))}</div>` : '';
   let cls, big, txt = '';
@@ -272,6 +280,8 @@ function alertBlock(a){
   return `<div class="alert"><div class="t">⚠ ${esc(head)} <span class="meta">(${esc(fdate(a.obs_date))})</span></div>${body}${acks}</div>`;
 }
 
+const SOIL_LEVELS = ['wet', 'moist', 'medium', 'dry', 'very_dry'];
+
 function methodOptions(){
   return ['kroplowe','deszczowanie','zalewowe'].map(m => `<option value="${m}">${esc(t('meth_' + m))}</option>`).join('');
 }
@@ -283,6 +293,8 @@ function forms(f){
     ${f.irrigation_mode === 'irrigation'
       ? `<button type="button" class="b p" onclick="toggleForm(${f.id},'irr')">${esc(t('btn_irr'))}</button>` : ''}
     <button type="button" class="b" onclick="toggleForm(${f.id},'rain')">${esc(t('btn_rain'))}</button>
+    <button type="button" class="b" style="grid-column:1/-1" onclick="toggleForm(${f.id},'soil')">${esc(t('btn_soil'))}</button>
+    ${f.irrigation_mode === 'irrigation' ? `<button type="button" class="b" style="grid-column:1/-1" onclick="toggleForm(${f.id},'salt')">${esc(t('btn_salt'))}</button>` : ''}
   </div>
   <form class="f" id="irr-${f.id}" onsubmit="return saveIrr(event, ${f.id})">
     <div class="row">
@@ -309,7 +321,34 @@ function forms(f){
       <button type="button" class="b" onclick="toggleForm(${f.id},'rain')">${esc(t('f_cancel'))}</button>
     </div>
   </form>
+  <form class="f" id="soil-${f.id}" onsubmit="return saveSoil(event, ${f.id})">
+    <p style="margin:6px 0;font-size:14px">${esc(t('soil_q'))}</p>
+    ${SOIL_LEVELS.map(l => `<label class="opt"><input type="radio" name="level" value="${l}"> ${esc(t('soil_' + l))}</label>`).join('')}
+    <label>${esc(t('f_date'))}</label><input type="date" name="date" value="${td}" max="${td}" required>
+    <div class="row" style="margin-top:10px">
+      <button type="submit" class="b p">${esc(t('f_save'))}</button>
+      <button type="button" class="b" onclick="toggleForm(${f.id},'soil')">${esc(t('f_cancel'))}</button>
+    </div>
+  </form>
+  ${f.irrigation_mode === 'irrigation' ? saltForm(f) : ''}
   <div class="msg" id="msg-${f.id}"></div>`;
+}
+
+function saltForm(f){
+  const sa = f.salt || {};
+  const opt = (name, v, label, cur) => `<label class="opt"><input type="radio" name="${name}" value="${v}" ${cur === v ? 'checked' : ''}> ${esc(label)}</label>`;
+  return `<form class="f" id="salt-${f.id}" onsubmit="return saveSalt(event, ${f.id})">
+    <p style="margin:6px 0;font-size:14px">${esc(t('salt_q'))}</p>
+    ${['none', 'spots', 'much', 'unknown'].map(v => opt('crust', v, t('salt_' + v), sa.farmer_salt_crust)).join('')}
+    <p style="margin:12px 0 6px;font-size:14px">${esc(t('leach_q'))}</p>
+    ${['yes', 'no', 'unknown'].map(v => opt('leach', v, t('leach_' + v), sa.farmer_leaching)).join('')}
+    <label>${esc(t('leach_m3'))}</label><input type="number" name="m3" min="1" max="20000" step="50" inputmode="numeric"
+      value="${sa.farmer_leaching_m3 || ''}">
+    <div class="row" style="margin-top:10px">
+      <button type="submit" class="b p">${esc(t('f_save'))}</button>
+      <button type="button" class="b" onclick="toggleForm(${f.id},'salt')">${esc(t('f_cancel'))}</button>
+    </div>
+  </form>`;
 }
 
 function history(f){
@@ -317,6 +356,10 @@ function history(f){
     ...f.irrigations.map(e => ({d: e.date, s: t('h_irr', {d: fdate(e.date),
         a: (e.amount_mm != null ? n0(e.amount_mm) + ' mm' : t('h_noamt')) + ' · ' + t('meth_' + e.method)})})),
     ...f.rain.map(r => ({d: r.date, s: t('h_rain', {d: fdate(r.date), mm: n0(r.mm)})})),
+    ...(f.soil_checks || []).map(c => ({d: c.date, s: t('h_soil', {d: fdate(c.date), s: c.level ? t('soil_' + c.level) : n0(c.fill_pct) + '%'})})),
+    ...(f.salt && f.salt.farmer_report_at ? [{d: f.salt.farmer_report_at.slice(0, 10), s: t('h_salt', {
+        s: f.salt.farmer_salt_crust ? t('salt_' + f.salt.farmer_salt_crust) : '—',
+        l: f.salt.farmer_leaching ? t('leach_' + f.salt.farmer_leaching) + (f.salt.farmer_leaching_m3 ? ` (${n0(f.salt.farmer_leaching_m3)} m³/ha)` : '') : '—'})}] : []),
   ].sort((a, b) => b.d.localeCompare(a.d)).slice(0, 6);
   if(!items.length) return '';
   return `<details class="hist"><summary>${esc(t('hist'))}</summary><ul>${items.map(i => `<li>${esc(i.s)}</li>`).join('')}</ul></details>`;
@@ -325,7 +368,7 @@ function history(f){
 function fieldCard(f){
   const mode = f.irrigation_mode === 'irrigation' ? t('m_irrigation') : t('m_rainfed');
   const crop = f.crop_type ? ` · ${esc(f.crop_type)}` : '';
-  const lowConf = f.balance && f.balance.initial_state_reliable === false ? `<div class="note">${esc(t('low_conf'))}</div>` : '';
+  const lowConf = f.balance && f.balance.initial_state_reliable === false ? `<div class="note">${esc(t('low_conf_soil'))}</div>` : '';
   const sat = f.last_obs && f.last_obs.date ? `<div class="note" style="font-style:normal">${esc(t('sat', {d: fdate(f.last_obs.date)}))}</div>` : '';
   return `<section class="card">
     <div class="card-h"><b>${esc(f.label)}</b><div class="meta">${esc(mode)}${crop}</div></div>
@@ -371,10 +414,33 @@ async function load(){
 }
 
 function toggleForm(id, which){
-  const el = document.getElementById(`${which}-${id}`);
-  const other = document.getElementById(`${which === 'irr' ? 'rain' : 'irr'}-${id}`);
-  other.classList.remove('open');
-  el.classList.toggle('open');
+  ['irr', 'rain', 'soil', 'salt'].filter(w => w !== which).forEach(w => {
+    const o = document.getElementById(`${w}-${id}`); if(o) o.classList.remove('open'); });
+  document.getElementById(`${which}-${id}`).classList.toggle('open');
+}
+
+async function saveSalt(ev, id){
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  const crust = fd.get('crust'), leach = fd.get('leach'), m3 = fd.get('m3');
+  if(!crust && !leach){ flash(id, false, t('salt_pick')); return false; }
+  const body = {};
+  if(crust) body.salt_crust = crust;
+  if(leach) body.leaching = leach;
+  if(leach === 'yes' && m3) body.leaching_m3_ha = parseFloat(m3);
+  try{ await post(`/api/f/${encodeURIComponent(TOKEN)}/field/${id}/salt`, body); await load(); flash(id, true, t('saved')); }
+  catch(e){ flash(id, false, t('err') + e.message); }
+  return false;
+}
+
+async function saveSoil(ev, id){
+  ev.preventDefault();
+  const fd = new FormData(ev.target);
+  if(!fd.get('level')){ flash(id, false, t('soil_pick')); return false; }
+  try{ await post(`/api/f/${encodeURIComponent(TOKEN)}/field/${id}/soil_check`, {check_date: fd.get('date'), level: fd.get('level')});
+       await load(); flash(id, true, t('saved')); }
+  catch(e){ flash(id, false, t('err') + e.message); }
+  return false;
 }
 
 async function post(url, body){

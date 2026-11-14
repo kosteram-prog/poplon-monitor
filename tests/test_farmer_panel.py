@@ -231,6 +231,9 @@ def test_auto_sugestie(isolated_db, sent, monkeypatch):
     monkeypatch.setattr(fp, "field_balance_summary", lambda f, use_cache=True: _summary())
     assert fp.auto_suggestions_job() == []                # opcja wyłączona
     isolated_db.update_farmer(farmer["id"], auto_suggestions=1)
+    assert fp.auto_suggestions_job() == []                # brak dziennika nawodnień — bilans niewiarygodny
+    isolated_db.add_irrigation_event(fid, (date.today() - timedelta(days=20)).isoformat(), "kroplowe",
+                                     amount_mm=40)
     res = fp.auto_suggestions_job()
     assert [r["status"] for r in res] == ["sent"]
     assert fp.auto_suggestions_job() == []                # nie ponawia w ciągu 3 dni
@@ -328,3 +331,23 @@ def test_reczna_sugestia(app_client, isolated_db, monkeypatch):
     monkeypatch.setattr(fp, "field_balance_summary",
                         lambda f, use_cache=True: _summary(suggested_dose_mm=None))
     assert app_client.post(f"/api/farmers/field/{fid}/suggest").status_code == 409
+
+
+
+def test_auto_sugestie_wstrzymane_gdy_satelita_widzi_wode(isolated_db, sent, monkeypatch):
+    isolated_db.init_db()
+    monkeypatch.setenv("SMSAPI_TOKEN", "tok")
+    farmer, fid = _farmer(isolated_db, auto_suggestions=1)
+    isolated_db.add_irrigation_event(fid, (date.today() - timedelta(days=20)).isoformat(), "kroplowe",
+                                     amount_mm=40)
+    isolated_db.upsert_thermal(fid, [{"scene_date": (date.today() - timedelta(days=3)).isoformat(),
+                                      "t_field": 30, "t_cold": 29.5, "t_hot": 50, "tsi": 0.05, "ndvi": 0.7}])
+    monkeypatch.setattr(fp, "field_balance_summary", lambda f, use_cache=True: _summary())
+    assert fp.auto_suggestions_job() == [] and not sent
+
+
+def test_panel_rolnika_informuje_o_braku_dziennika(app_client, isolated_db, monkeypatch):
+    farmer, fid = _farmer(isolated_db)
+    monkeypatch.setattr(fp, "field_balance_summary", lambda f, use_cache=True: _summary())
+    data = app_client.get(f"/api/f/{farmer['token']}").json()
+    assert data["fields"][0]["balance_note"] == "no_irrigation_log"

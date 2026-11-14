@@ -150,3 +150,15 @@ def reset_biomass_models():
     analytics.BIOMASS_CIRE_MODEL = analytics.N_CIRE_MODEL = None
     yield
     analytics.BIOMASS_CIRE_MODEL, analytics.N_CIRE_MODEL = b, n
+
+
+@pytest.fixture(autouse=True)
+def no_soilgrids(monkeypatch):
+    """SoilGrids (soil_water.fetch_soilgrids) to sieć — w testach domyślnie
+    niedostępne od razu (bez ponawiania i czekania). Testy modułu glebowego
+    podmieniają tę funkcję na własny profil."""
+    import soil_water
+
+    def _offline(*a, **k):
+        raise RuntimeError("SoilGrids wyłączone w testach")
+    monkeypatch.setattr(soil_water, "fetch_soilgrids", _offline)

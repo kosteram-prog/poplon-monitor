@@ -28,11 +28,14 @@ rozdzielczość ~9-25km), więc dokładna geometria działki nie ma znaczenia.
 Integruje się z core.py/analytics.py bez ich modyfikacji.
 """
 
+import logging
 import os
 from datetime import date, timedelta
 from typing import Optional
 
 import requests
+
+log = logging.getLogger("weather")
 
 OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
@@ -87,13 +90,28 @@ def om_get(kind: str, params: dict, ttl_s: float, timeout: int = 30) -> dict:
     try:
         r = requests.get(om_url(kind), params=params, timeout=timeout)
     except requests.RequestException as e:
+        stale = _stale_fallback(key)
+        if stale is not None:
+            return stale
         raise RuntimeError(f"Brak połączenia z Open-Meteo: {e}")
     if r.status_code != 200:
+        # Limit darmowego API (429) albo awaria: lepsze dane sprzed kilku
+        # godzin z pamięci podręcznej niż brak bilansu w całym module wodnym.
+        stale = _stale_fallback(key)
+        if stale is not None:
+            log.warning("Open-Meteo %s — użyto starszych danych z pamięci podręcznej", r.status_code)
+            return stale
         raise RuntimeError(f"Open-Meteo błąd {r.status_code}: {r.text[:300]}")
     data = r.json()
     if WEATHER_CACHE_ENABLED:
         _cache_set(key, _json.dumps(data))
     return data
+
+
+def _stale_fallback(key: str):
+    if not WEATHER_CACHE_ENABLED:
+        return None
+    return _cache_get(key, float("inf"))
 
 
 def _cache_get(key: str, ttl_s: float):
@@ -326,6 +344,81 @@ def fetch_recent_and_forecast(geom_4326, past_days: int = 92,
             "is_forecast": d > today,
         })
     return out
+
+
+SEASON_FC_PAST_DAYS = 14   # ile dni wstecz bierzemy z API prognozy, żeby zakryć opóźnienie ERA5
+
+
+def fetch_season_weather(geom_4326, t_start: date, forecast_days: int = 10,
+                         today: Optional[date] = None) -> list[dict]:
+    """Pogoda do bilansu od początku sezonu: archiwum ERA5 od `t_start` do
+    ostatniego dnia, który reanaliza już ma (opóźnienie ok. 5 dni), a dalej
+    API prognozy (ostatnie dni + prognoza). Wiersze z archiwum niosą też
+    wilgotność gleby ERA5-Land (sm_0_7, sm_7_28, sm_28_100) — z niej bilans
+    bierze stan początkowy. Rzuca RuntimeError, gdy archiwum niedostępne."""
+    today = today or date.today()
+    arch = fetch_weather_series(geom_4326, t_start, today - timedelta(days=1))
+    rows = [{**r, "is_forecast": False} for r in arch
+            if r.get("precip_mm") is not None and r.get("et0_mm") is not None]
+    if not rows:
+        raise RuntimeError("Archiwum ERA5 nie zwróciło danych dla okresu bilansu.")
+    last = rows[-1]["date"]
+    gap = (today - last).days
+    past = SEASON_FC_PAST_DAYS if gap < SEASON_FC_PAST_DAYS else min(92, gap + 1)
+    recent = fetch_recent_and_forecast(geom_4326, past_days=past, forecast_days=forecast_days)
+    rows += [r for r in recent if r["date"] > last]
+    return sorted(rows, key=lambda r: r["date"])
+
+
+# Wilgotność gleby ERA5-Land jako punkt startu bilansu. ERA5-Land liczy wodę
+# w glebie dla 6 typów gleb modelu HTESSEL, każdy z własną pojemnością polową
+# (FC) i punktem więdnięcia (WP). Typ komórki rozpoznajemy po szczytowej
+# wilgotności strefy korzeniowej w pobranym archiwum (p95 dobowych wartości
+# od 1 października: w Polsce szczyt jest zimą, w Azji Centralnej wiosną —
+# nie zakładamy pory roku), a FC/WP bierzemy z tabeli — to te same wartości,
+# których używa model, więc przeliczenie θ -> % wody dostępnej jest z nim
+# spójne. ERA5-Land nie widzi nawadniania, więc lato go nie zawyża. Ryzyko:
+# po suchym roku typ wyjdzie o klasę za lekki (zawyżony % na starcie) —
+# dlatego wynik jest oznaczony jako szacunek.
+# (klucz, nazwa, θ_FC, θ_WP) [m³/m³] — ECMWF IFS Cy45r1, Part IV, tab. 8.9
+HTESSEL_SOILS = (
+    ("coarse", "gruboziarnista (piasek)", 0.244, 0.059),
+    ("medium", "średnia", 0.347, 0.151),
+    ("medium_fine", "średnio drobna", 0.383, 0.133),
+    ("fine", "drobna (ilasta)", 0.448, 0.279),
+    ("very_fine", "bardzo drobna", 0.541, 0.335),
+    ("organic", "organiczna", 0.663, 0.267),
+)
+ROOT_LAYERS_CM = ((7, "sm_0_7"), (21, "sm_7_28"), (72, "sm_28_100"))
+PEAK_MIN_DAYS = 120
+
+
+def root_zone_theta(row: dict) -> Optional[float]:
+    """Średnia ważona miąższością wilgotność 0–100 cm z warstw ERA5-Land."""
+    vals = [(w, row.get(k)) for w, k in ROOT_LAYERS_CM]
+    if any(v is None for _, v in vals):
+        return None
+    return sum(w * v for w, v in vals) / 100.0
+
+
+def hydro_year_start(season_start: date) -> date:
+    """1 października przed startem sezonu — od tej daty archiwum obejmuje zimę."""
+    return date(season_start.year - 1, 10, 1)
+
+
+def peak_theta(rows: list) -> Optional[float]:
+    """p95 dobowej wilgotności strefy korzeniowej w pobranym archiwum."""
+    vals = sorted(v for v in (root_zone_theta(r) for r in rows if not r.get("is_forecast")) if v is not None)
+    if len(vals) < PEAK_MIN_DAYS:
+        return None
+    return vals[min(len(vals) - 1, int(round(0.95 * (len(vals) - 1))))]
+
+
+def soil_limits(peak: float) -> dict:
+    """FC i WP strefy korzeniowej: typ gleby HTESSEL o FC najbliższej
+    szczytowej wilgotności (p95)."""
+    key, name, fc, wp = min(HTESSEL_SOILS, key=lambda s: abs(s[2] - peak))
+    return {"fc": fc, "wp": wp, "soil_type": name, "soil_key": key, "peak_theta": round(peak, 3)}
 
 
 # ---------------------------------------------------------------------------

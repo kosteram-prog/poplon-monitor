@@ -537,6 +537,124 @@ def rain_reading_delete(reading_id: int, _auth=Depends(require_operator_key)):
     return {"status": "deleted"}
 
 
+class FieldSoilRequest(BaseModel):
+    """Gleba pola ustalona przez doradcę. Pusty string / null czyści wartość."""
+    texture_class: Optional[str] = Field(None, max_length=30)
+    root_limit_cm: Optional[int] = Field(None, ge=10, le=300)
+    salinity_class: Optional[str] = Field(None, max_length=20)
+    ec_value: Optional[float] = Field(None, ge=0, le=100, description="dS/m (mS/cm)")
+    ec_method: Optional[str] = Field(None, max_length=10, description="ece | ec_1_5 | ec_water")
+    gw_depth_m: Optional[float] = Field(None, ge=0, le=30)
+
+
+def _soil_payload(field: dict, fetch: bool = True) -> dict:
+    import soil_water
+    t = soil_water.field_taw(field, fetch=fetch)
+    row = db.get_field_soil(field["id"]) or {}
+    return {**t, "sg_fetched_at": row.get("sg_fetched_at"), "sg_error": row.get("sg_error"),
+            "salinity": soil_water.field_salinity(field, row, t.get("texture")),
+            "manual_taw_mm": field.get("soil_taw_mm"),
+            "classes": [{"key": k, "awc_mm_m": round(soil_water.awc_mm_per_m(s, c))}
+                        for k, (s, c) in soil_water.TEXTURE_CLASSES.items()],
+            "attribution": soil_water.SOILGRIDS_ATTRIBUTION if t.get("texture_from") == "soilgrids" or t.get("sand") else None}
+
+
+@router.get("/field/{water_field_id}/soil")
+def field_soil_get(water_field_id: int):
+    """Pojemność wodna gleby pola i jej źródło (soil_water.field_taw)."""
+    return _soil_payload(_get_field_or_404(water_field_id))
+
+
+@router.put("/field/{water_field_id}/soil")
+def field_soil_set(water_field_id: int, req: FieldSoilRequest, _auth=Depends(require_operator_key)):
+    import soil_water
+    field = _get_field_or_404(water_field_id)
+    changes = req.model_dump(exclude_unset=True)
+    if "texture_class" in changes:
+        tc = (changes["texture_class"] or "").strip() or None
+        if tc is not None and tc not in soil_water.TEXTURE_CLASSES:
+            raise HTTPException(status_code=422, detail=f"Nieznany gatunek gleby: {tc}")
+        changes["texture_class"] = tc
+    if "salinity_class" in changes:
+        sc = (changes["salinity_class"] or "").strip() or None
+        if sc is not None and sc not in soil_water.SALINITY_CLASSES:
+            raise HTTPException(status_code=422, detail=f"Nieznana klasa zasolenia: {sc}")
+        changes["salinity_class"] = sc
+    if "ec_method" in changes:
+        em = (changes["ec_method"] or "").strip() or None
+        if em is not None and em not in soil_water.EC_METHODS:
+            raise HTTPException(status_code=422, detail=f"Nieznana metoda pomiaru EC: {em}")
+        changes["ec_method"] = em
+    if changes.get("ec_value") is not None and not (changes.get("ec_method") or
+                                                    (db.get_field_soil(water_field_id) or {}).get("ec_method")):
+        raise HTTPException(status_code=422, detail="Podaj metodę pomiaru EC (ece, ec_1_5, ec_water).")
+    if changes:
+        db.save_field_soil(water_field_id, **changes)
+    return _soil_payload(field)
+
+
+@router.post("/field/{water_field_id}/soil/refresh")
+def field_soil_refresh(water_field_id: int, _auth=Depends(require_operator_key)):
+    """Pobiera profil SoilGrids na nowo (np. po zmianie granic pola)."""
+    field = _get_field_or_404(water_field_id)
+    db.save_field_soil(water_field_id, sg_profile_json=None, sg_fetched_at=None, sg_error=None, sg_error_at=None)
+    return _soil_payload(field)
+
+
+class SoilCheckRequest(BaseModel):
+    check_date: str = Field(..., description="RRRR-MM-DD")
+    level: Optional[str] = Field(None, pattern="^(wet|moist|medium|dry|very_dry)$",
+                                 description="ocena „gleba w dłoni” (FAO/USDA)")
+    fill_pct: Optional[float] = Field(None, ge=0, le=100, description="% wody dostępnej (np. z czujnika)")
+    method: str = Field("feel", pattern="^(feel|sensor|other)$")
+    depth_cm: Optional[int] = Field(None, ge=5, le=200)
+    notes: Optional[str] = Field(None, max_length=500)
+
+    @field_validator("check_date")
+    @classmethod
+    def _validate_check_date(cls, v):
+        try:
+            d = date.fromisoformat(v)
+        except ValueError:
+            raise ValueError("check_date musi być w formacie RRRR-MM-DD")
+        if d > date.today():
+            raise ValueError("check_date nie może być z przyszłości")
+        return v
+
+
+def soil_check_fill(level: Optional[str], fill_pct: Optional[float]) -> float:
+    import water_balance
+    if fill_pct is not None:
+        return float(fill_pct)
+    if level is None:
+        raise HTTPException(status_code=422, detail="Podaj ocenę (level) albo % wody dostępnej (fill_pct).")
+    return water_balance.SOIL_FEEL_LEVELS[level]
+
+
+@router.post("/field/{water_field_id}/soil_check")
+def soil_check_add(water_field_id: int, req: SoilCheckRequest, _auth=Depends(require_operator_key)):
+    """Punkt kontrolny wilgotności: ocena w polu ustawia stan profilu
+    w bilansie wodnym w danym dniu (water_balance.run_balance)."""
+    _get_field_or_404(water_field_id)
+    fill = soil_check_fill(req.level, req.fill_pct)
+    cid = db.add_soil_check(water_field_id, req.check_date, fill, method=req.method, level=req.level,
+                            depth_cm=req.depth_cm, source="manual", notes=req.notes)
+    return {"id": cid, "fill_pct": fill}
+
+
+@router.get("/field/{water_field_id}/soil_checks")
+def soil_check_list(water_field_id: int):
+    _get_field_or_404(water_field_id)
+    return db.get_soil_checks(water_field_id)
+
+
+@router.delete("/soil_check/{check_id}")
+def soil_check_delete(check_id: int, _auth=Depends(require_operator_key)):
+    if not db.delete_soil_check(check_id):
+        raise HTTPException(status_code=404, detail="Nie ma takiego punktu kontrolnego")
+    return {"status": "deleted"}
+
+
 class BackfillRequest(BaseModel):
     days: int = Field(90, ge=7, le=365, description="Ile dni wstecz uzupełnić (gdy brak dat)")
     date_from: Optional[str] = Field(None, description="RRRR-MM-DD — początek okresu")
@@ -697,7 +815,7 @@ def water_optram_refresh(water_field_id: int, _auth=Depends(require_operator_key
     if not db.get_optram_params(water_field_id):
         raise HTTPException(status_code=409, detail="Pole nie ma jeszcze kalibracji OPTRAM.")
     try:
-        n = optram.update_recent(field, days=45)
+        n = optram.update_recent(field, days=45, force=True)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Blad OPTRAM: {e}")
     return {"added": n, **optram.get_field_optram(water_field_id)}
@@ -743,6 +861,33 @@ def water_thermal_delete(water_field_id: int, _auth=Depends(require_operator_key
     _get_field_or_404(water_field_id)
     db.delete_thermal(water_field_id)
     return {"deleted": True}
+
+
+class PrepareStepRequest(BaseModel):
+    step: str = Field(..., pattern="^(backfill|optram|thermal|check_now)$")
+
+
+@router.get("/field/{water_field_id}/prepare_plan")
+def water_field_prepare_plan(water_field_id: int):
+    """Co trzeba zrobić, żeby „Pełny obraz” miał wszystkie źródła, i ile to
+    kosztuje (szacunek PU) — bez wykonywania czegokolwiek."""
+    import water_overview
+    return water_overview.prepare_plan(_get_field_or_404(water_field_id))
+
+
+@router.post("/field/{water_field_id}/prepare_step")
+def water_field_prepare_step(water_field_id: int, req: PrepareStepRequest,
+                             _auth=Depends(require_operator_key)):
+    import water_overview
+    return water_overview.run_prepare_step(_get_field_or_404(water_field_id), req.step)
+
+
+@router.get("/field/{water_field_id}/overview")
+def water_field_overview(water_field_id: int):
+    """„Pełny obraz pola”: ocena z bilansu, satelity, OPTRAM, termiki i pogody
+    + wspólna oś czasu 0–100 (water_overview.py). Bez zapytań do satelitów."""
+    import water_overview
+    return water_overview.build_overview(_get_field_or_404(water_field_id))
 
 
 @router.post("/field/{water_field_id}/check_now")

@@ -2,7 +2,6 @@
 
 import sqlite3
 import threading
-from datetime import datetime
 
 DB_PATH = "monitoring.db"
 _lock = threading.Lock()
@@ -316,6 +315,46 @@ def init_db():
             obs_date TEXT NOT NULL,
             w REAL, ndvi REAL, valid_frac REAL,
             UNIQUE(water_field_id, obs_date)
+        );
+        """)
+
+        # Gleba pola do pojemności wodnej (soil_water): profil SoilGrids w cache,
+        # gatunek gleby z pola i ograniczenie korzeni podane przez doradcę.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS field_soil (
+            water_field_id INTEGER PRIMARY KEY,
+            texture_class TEXT,
+            root_limit_cm INTEGER,
+            sg_profile_json TEXT,
+            sg_fetched_at TEXT,
+            sg_error TEXT,
+            sg_error_at TEXT,
+            updated_at TEXT DEFAULT (datetime('now'))
+        );
+        """)
+        # Zasolenie i wody gruntowe (doradca) + zgłoszenia rolnika (listopad 2026).
+        for col, typ in (("salinity_class", "TEXT"), ("ec_value", "REAL"), ("ec_method", "TEXT"),
+                         ("gw_depth_m", "REAL"), ("farmer_salt_crust", "TEXT"), ("farmer_leaching", "TEXT"),
+                         ("farmer_leaching_m3", "REAL"), ("farmer_report_at", "TEXT")):
+            try:
+                c.execute(f"ALTER TABLE field_soil ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError:
+                pass  # kolumna już istnieje
+
+        # Punkty kontrolne wilgotności gleby (water_balance): ocena w polu
+        # („gleba w dłoni” albo czujnik) ustawia stan profilu w bilansie.
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS soil_checks (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            water_field_id INTEGER NOT NULL,
+            check_date TEXT NOT NULL,
+            fill_pct REAL NOT NULL,
+            method TEXT,
+            level TEXT,
+            depth_cm INTEGER,
+            source TEXT DEFAULT 'manual',
+            notes TEXT,
+            created_at TEXT DEFAULT (datetime('now'))
         );
         """)
 
@@ -966,6 +1005,57 @@ def set_weather_cache(key, payload):
 
 
 # ---------------------------------------------------------------------------
+# field_soil — gleba pola do pojemności wodnej (patrz soil_water)
+# ---------------------------------------------------------------------------
+
+_FIELD_SOIL_COLS = {"texture_class", "root_limit_cm", "sg_profile_json", "sg_fetched_at", "sg_error", "sg_error_at",
+                    "salinity_class", "ec_value", "ec_method", "gw_depth_m",
+                    "farmer_salt_crust", "farmer_leaching", "farmer_leaching_m3", "farmer_report_at"}
+
+
+def get_field_soil(water_field_id):
+    with _lock, _conn() as c:
+        r = c.execute("SELECT * FROM field_soil WHERE water_field_id=?", (water_field_id,)).fetchone()
+        return dict(r) if r else None
+
+
+def save_field_soil(water_field_id, **kwargs):
+    cols = {k: v for k, v in kwargs.items() if k in _FIELD_SOIL_COLS}
+    if not cols:
+        return
+    with _lock, _conn() as c:
+        c.execute("INSERT OR IGNORE INTO field_soil (water_field_id) VALUES (?)", (water_field_id,))
+        sets = ", ".join(f"{k}=?" for k in cols)
+        c.execute(f"UPDATE field_soil SET {sets}, updated_at=datetime('now') WHERE water_field_id=?",
+                  (*cols.values(), water_field_id))
+
+
+# ---------------------------------------------------------------------------
+# soil_checks — punkty kontrolne wilgotności gleby (patrz water_balance)
+# ---------------------------------------------------------------------------
+
+def add_soil_check(water_field_id, check_date, fill_pct, method=None, level=None,
+                   depth_cm=None, source="manual", notes=None):
+    with _lock, _conn() as c:
+        cur = c.execute("INSERT INTO soil_checks (water_field_id,check_date,fill_pct,method,level,depth_cm,"
+                        "source,notes) VALUES (?,?,?,?,?,?,?,?)",
+                        (water_field_id, check_date, float(fill_pct), method, level, depth_cm, source, notes))
+        return cur.lastrowid
+
+
+def get_soil_checks(water_field_id):
+    with _lock, _conn() as c:
+        rows = c.execute("SELECT * FROM soil_checks WHERE water_field_id=? ORDER BY check_date ASC, id ASC",
+                         (water_field_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_soil_check(check_id):
+    with _lock, _conn() as c:
+        return c.execute("DELETE FROM soil_checks WHERE id=?", (check_id,)).rowcount
+
+
+# ---------------------------------------------------------------------------
 # rain_gauge_readings — odczyty deszczomierza rolnika. W bilansie wodnym
 # zastępują opad z modelu (siatka 9-25 km nie widzi lokalnych burz).
 # ---------------------------------------------------------------------------
@@ -1164,13 +1254,6 @@ def count_sms_sent_since(phone, since_sql_modifier="-1 day", kind=None, water_fi
         params.append(water_field_id)
     with _lock, _conn() as c:
         return c.execute(q, params).fetchone()[0]
-
-
-def last_sms(kind, water_field_id):
-    with _lock, _conn() as c:
-        row = c.execute("SELECT * FROM sms_outbox WHERE kind=? AND water_field_id=? AND status='sent' "
-                        "ORDER BY id DESC LIMIT 1", (kind, water_field_id)).fetchone()
-        return dict(row) if row else None
 
 
 _FARMER_ACKS = {"seen", "will_irrigate", "irrigated", "disagree"}

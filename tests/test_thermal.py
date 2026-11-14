@@ -68,8 +68,11 @@ def test_describe_klasy_i_nierownomiernosc():
             "t_p10": 34.0, "t_p90": 41.0}
     s = th.describe({**base, "tsi": 0.6})
     assert "prawdopodobny stres" in s and "nierówne nawodnienie" in s and "+12.0 K" in s
-    s = th.describe({**base, "tsi": 0.1, "t_p90": 35.0, "ndvi": 0.2})
-    assert "bez oznak stresu" in s and "głównie glebę" in s and "nierówne" not in s
+    s = th.describe({**base, "tsi": 0.1, "t_p90": 35.0, "ndvi": 0.5})
+    assert "bez oznak stresu" in s and "nierówne" not in s
+    # słaba okrywa: bez klasy „stres wodny” — indeks pokazuje nagrzanie gleby
+    s = th.describe({**base, "tsi": 0.7, "ndvi": 0.2})
+    assert "prawdopodobny stres" not in s and "nagrzanie gleby" in s
 
 
 def _tar(arr, dates):
@@ -133,7 +136,8 @@ def test_fetch_field_i_zdanie(field, isolated_db, monkeypatch):
     assert out["latest"]["tsi"] > 0.5 and not out["small_field"]
     v = th.attach_thermal(field, {"message_pl": "Spadek NDMI.", "risk_flag": True})
     assert "Termika Landsat" in v["message_pl"] and "potwierdza" in v["message_pl"]
-    assert th.update_recent(field, days=10) == 2
+    assert th.update_recent(field, days=10) == 0          # tuż po pobraniu — pominięte
+    assert th.update_recent(field, days=10, force=True) == 2
 
 
 def test_stara_scena_bez_zdania(field, isolated_db):

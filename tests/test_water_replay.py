@@ -123,6 +123,12 @@ def test_scheduler_tworzy_alarm_bilansu_gdy_satelita_milczy(irr_field, isolated_
         "status": "stress", "days_to_stress": 0, "depletion_mm": 70, "raw_mm": 55,
         "suggested_irrigation_date": "2026-07-01", "suggested_dose_mm": 70, "suggested_dose_m3_ha": 700}})
     import scheduler
+    from datetime import date as _d, timedelta as _td
+    # Bez wpisu w dzienniku bilans pola nawadnianego nie alarmuje (audyt 11.2026)
+    scheduler.check_all_water_fields()
+    assert isolated_db.get_water_alarms(field["id"]) == []
+    isolated_db.add_irrigation_event(field["id"], (_d.today() - _td(days=30)).isoformat(), "kroplowe",
+                                     amount_mm=40)
     scheduler.check_all_water_fields()
     scheduler.check_all_water_fields()   # drugi przebieg: karencja, bez duplikatu
     alarms = isolated_db.get_water_alarms(field["id"])

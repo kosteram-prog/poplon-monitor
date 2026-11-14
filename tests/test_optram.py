@@ -154,7 +154,7 @@ def test_calibrate_field_zapisuje_i_opisuje(field, isolated_db, monkeypatch):
     _mock_sh(monkeypatch)
     for k in range(12):
         d = (date.today() - timedelta(days=5 * k)).isoformat()
-        isolated_db.add_water_observation(field["id"], d, ndvi_mean=0.4, sm_0_7=0.10 + 0.01 * (11 - k))
+        isolated_db.add_water_observation(field["id"], d, ndvi_mean=0.4, sm_0_7=0.10 + 0.01 * k)
     res = o.calibrate_field(field)
     assert res["calibrated"] and res["params"]["quality"] == "good"
     assert res["params"]["n_scenes"] == 12 and len(res["scatter"]) == o.SCATTER_N
@@ -182,7 +182,8 @@ def test_update_recent_dopisuje(field, isolated_db, monkeypatch):
     calls = _mock_sh(monkeypatch)
     o.calibrate_field(field)
     isolated_db.clear_optram_series(field["id"])
-    n = o.update_recent(field, days=20)
+    assert o.update_recent(field, days=20) == 0          # tuż po kalibracji — pominięte (bez kosztu PU)
+    n = o.update_recent(field, days=20, force=True)
     assert n == 5 and len(isolated_db.get_optram_series(field["id"])) == 5
     assert (calls[-1][1] - calls[-1][0]).days == 20
 
@@ -227,3 +228,40 @@ def test_api_optram_blad_dopasowania_422(app_client, isolated_db, monkeypatch):
     monkeypatch.setattr(o, "fetch_stack", lambda *a: np.full((2, 5, 5), o.NODATA, dtype="int16"))
     r = app_client.post(f"/api/water/field/{fid}/optram/calibrate", json={})
     assert r.status_code == 422 and "Za mało" in r.json()["detail"]
+
+
+def test_zdanie_pominiete_przy_niezgodnosci_z_era5(field, isolated_db, monkeypatch):
+    """Test na żywo (pole deszczowe w PL) dał r = -0,43 z ERA5-Land — wtedy
+    zdanie nie trafia do werdyktu (panel nadal pokazuje dane z ostrzeżeniem)."""
+    _mock_sh(monkeypatch)
+    for k in range(12):
+        d = (date.today() - timedelta(days=5 * k)).isoformat()
+        isolated_db.add_water_observation(field["id"], d, ndvi_mean=0.4, sm_0_7=0.30 - 0.01 * k)
+    res = o.calibrate_field(field)
+    assert res["era5"]["r"] < 0 and o.optram_sentence(field["id"]) == ""
+
+
+def test_despike_usuwa_pojedynczy_skok_ale_nie_trwala_zmiane():
+    base = date(2026, 7, 1)
+    rows = [{"obs_date": (base + timedelta(days=3 * k)).isoformat(), "w": 0.2, "ndvi": 0.7} for k in range(10)]
+    rows[4] = {**rows[4], "w": 1.0}                         # cień chmury — jeden dzień
+    for r in rows[7:]:
+        r["w"] = 0.8                                         # deszcz — utrzymuje się
+    kept = [r["obs_date"] for r in o.despike(rows)]
+    assert rows[4]["obs_date"] not in kept and all(r["obs_date"] in kept for r in rows[7:])
+
+
+def test_mediana_z_percentyli():
+    assert o._median({"mean": 4000, "percentiles": {"50.0": 2500}}) == 2500
+    assert o._median({"mean": 4000}) == 4000
+
+
+
+def test_update_recent_okno_od_ostatniej_sceny(field, isolated_db, monkeypatch):
+    calls = _mock_sh(monkeypatch)
+    o.calibrate_field(field)
+    isolated_db.set_setting(o._refresh_marker(field["id"]), (date.today() - timedelta(days=3)).isoformat())
+    o.update_recent(field)
+    a, b, _ = calls[-1]
+    # ostatnia scena = dziś, więc okno = SPIKE_WINDOW_DAYS + 2, a nie pełne 30 dni
+    assert (b - a).days == o.SPIKE_WINDOW_DAYS + 2

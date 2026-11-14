@@ -5,7 +5,7 @@ import math
 import os
 import threading
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 
 import requests
 from pyproj import Transformer

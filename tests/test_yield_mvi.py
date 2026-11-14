@@ -136,3 +136,24 @@ def test_api_mapa_plonu_walidacja(app_client):
     r = app_client.post("/api/yield/mvi", json={"geometry_wkt": SQ_WKT, "crop_type": "kukurydza", "season_year": 2026,
                                                 "reported_yield_t_ha": 9, "date_from": "2026-09-01", "date_to": "2026-06-01"})
     assert r.status_code == 422
+
+
+def test_pas_brzegowy_pominiety(tmp_path, monkeypatch, fake_process_api):
+    """Test na żywo: piksele na granicy pola (droga, miedza) dawały czerwoną
+    obwódkę — pas EDGE_BUFFER_M jest pomijany, gdy pole jest dość duże."""
+    from shapely import wkt
+    monkeypatch.setattr(ym, "YIELD_MAPS_DIR", str(tmp_path))
+    g = wkt.loads(SQ_WKT)
+    full = ym.build_yield_map(g, 8.0, date(2026, 6, 1), date(2026, 9, 15), 8)
+    monkeypatch.setattr(ym, "EDGE_BUFFER_M", 0.0)
+    no_buf = ym.build_yield_map(g, 8.0, date(2026, 6, 1), date(2026, 9, 15), 9)
+    assert full["field_pixels"] < no_buf["field_pixels"]
+
+
+def test_nakladka_bez_ostrzezen_przy_nan():
+    import warnings
+    yld = np.array([[8.0, np.nan], [9.0, 7.0]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        png = ym.overlay_png(yld, np.isfinite(yld), 8.0)
+    assert png[:4] == b"\x89PNG"

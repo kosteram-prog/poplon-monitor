@@ -59,7 +59,6 @@ SMALL_FIELD_HA = 3.0
 SENTENCE_MAX_AGE_DAYS = 16
 TSI_MID = 0.25
 TSI_HIGH = 0.5
-DEFAULT_MONTHS = 6
 
 EVALSCRIPT = """
 //VERSION=3
@@ -197,13 +196,16 @@ def describe(row: dict) -> str:
     if row.get("t_cold") is not None:
         msg += (f"; różnica do najchłodniejszej gęstej roślinności w okolicy: "
                 f"{row['t_field'] - row['t_cold']:+.1f} K")
-    if row.get("tsi") is not None:
+    low_cover = row.get("ndvi") is not None and row["ndvi"] < LOW_COVER_NDVI
+    if row.get("tsi") is not None and not low_cover:
         msg += f"; indeks stresu termicznego {row['tsi']:.2f} — {tsi_class(row['tsi'])}"
+    elif row.get("tsi") is not None:
+        msg += f"; indeks stresu termicznego {row['tsi']:.2f}"
     elif row.get("t_cold") is None:
         msg += " (brak gęstej roślinności w okolicy do porównania)"
     msg += "."
-    if row.get("ndvi") is not None and row["ndvi"] < LOW_COVER_NDVI:
-        msg += " Słaba okrywa — temperatura odzwierciedla głównie glebę."
+    if low_cover:
+        msg += " Słaba okrywa — temperatura i indeks odzwierciedlają głównie nagrzanie gleby, nie stan roślin."
     spread = (row.get("t_p90") or 0) - (row.get("t_p10") or 0)
     if row.get("ndvi", 0) >= SPREAD_NDVI and spread >= SPREAD_ALERT_K:
         msg += f" Różnica temperatur w polu {spread:.1f} K — możliwe nierówne nawodnienie."
@@ -299,21 +301,44 @@ def fetch_field(field: dict, date_from: date, date_to: date) -> list:
     region = calibration_region(geom, REGION_BUFFER_M)
     arr, transform, dates = fetch_stack(region, date_from, date_to)
     inside = ~geometry_mask([mapping(inner)], out_shape=arr.shape[1:], transform=transform)
-    if not inside.any():
-        inside = ~geometry_mask([mapping(geom)], out_shape=arr.shape[1:], transform=transform,
-                                all_touched=True)
+    # Małe pole (test na żywo: 3 ha -> 5 pikseli po buforze 45 m): bez bufora,
+    # a w ostateczności każdy piksel dotykający pola. Panel i tak ostrzega
+    # o polach < SMALL_FIELD_HA (piksel termiczny 100 m miesza się z otoczeniem).
+    for opts in ((geom, False), (geom, True)):
+        if int(inside.sum()) >= MIN_FIELD_PX:
+            break
+        inside = ~geometry_mask([mapping(opts[0])], out_shape=arr.shape[1:], transform=transform,
+                                all_touched=opts[1])
     rows = stack_metrics(arr, dates, inside)
     db.upsert_thermal(field["id"], rows)
+    db.set_setting(_refresh_marker(field["id"]), date.today().isoformat())
     log.info(f"Termika pole {field['id']}: {arr.shape[0] // 2} scen, {len(rows)} czystych nad polem")
     return rows
 
 
-def update_recent(field: dict, days: int = 40) -> int:
-    """Scheduler: dociąga ostatnie sceny dla pól, które już mają termikę."""
+REFRESH_MIN_INTERVAL_DAYS = 4   # L8+L9 razem dają nową scenę co ~8 dni
+REFRESH_MAX_DAYS = 40
+
+
+def _refresh_marker(field_id: int) -> str:
+    return f"thermal_refresh:{field_id}"
+
+
+def update_recent(field: dict, days: Optional[int] = None, force: bool = False) -> int:
+    """Scheduler / „Sprawdź teraz”: dociąga nowe sceny dla pól, które już mają
+    termikę. Audyt 11.2026: wcześniej co 48 h zawsze 40 dni (te same sceny
+    opłacane kilka razy) — teraz od ostatniej sceny i nie częściej niż co
+    REFRESH_MIN_INTERVAL_DAYS."""
     import db
-    if not db.get_thermal_series(field["id"]):
+    series = db.get_thermal_series(field["id"])
+    if not series:
         return 0
     end = date.today()
+    last_try = db.get_setting(_refresh_marker(field["id"]))
+    if not force and last_try and (end - date.fromisoformat(last_try[:10])).days < REFRESH_MIN_INTERVAL_DAYS:
+        return 0
+    if days is None:
+        days = min(REFRESH_MAX_DAYS, max(16, (end - date.fromisoformat(series[-1]["scene_date"])).days + 3))
     return len(fetch_field(field, end - timedelta(days=days), end))
 
 

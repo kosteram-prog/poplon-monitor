@@ -57,11 +57,19 @@ MIN_SCENES_OK = 8
 MIN_PX_OK = 5000
 MIN_NDVI_SPAN_OK = 0.40
 MIN_EDGE_GAP = 0.3             # STR_w - STR_d na całym zakresie NDVI
-MIN_SERIES_VALID_FRAC = 0.6
+# W jest bardzo czułe na niezamaskowane cienie chmur (B12 ciemnieje = „mokro”)
+# — test na żywo (pole 101807_5.0013.47) dał W = 1,0 na scenach z 63–77%
+# czystych pikseli. Stąd ostrzejszy próg i mediana zamiast średniej z pola.
+MIN_SERIES_VALID_FRAC = 0.9
 SENTENCE_MAX_AGE_DAYS = 12
 DENSE_CANOPY_NDVI = 0.6
 
 W_DRY = 0.30
+BARE_SOIL_NDVI = 0.2
+# Minimalna zgodność z wilgotnością ERA5-Land 0–7 cm, żeby zdanie OPTRAM
+# trafiało do werdyktu (przy >= ERA5_MIN_N wspólnych datach).
+ERA5_MIN_N = 10
+ERA5_MIN_R = 0.2
 W_WET = 0.60
 
 EVALSCRIPT_STACK = """
@@ -367,6 +375,7 @@ def fetch_series(geom_4326, t_start: date, t_end: date, p: dict) -> list:
         "aggregation": {"timeRange": stats_time_range(t_start, t_end),
                         "aggregationInterval": {"of": "P1D"},
                         "resx": PIXEL_M, "resy": PIXEL_M, "evalscript": series_evalscript(p)},
+        "calculations": {"w": {"statistics": {"default": {"percentiles": {"k": [50]}}}}},
     }
     headers = {"Authorization": f"Bearer {core.cdse_token()}", "Content-Type": "application/json"}
     r = _post_with_retry(analytics.CDSE_STATS_URL, payload, headers, timeout=240,
@@ -374,6 +383,42 @@ def fetch_series(geom_4326, t_start: date, t_end: date, p: dict) -> list:
     if r.status_code != 200:
         raise RuntimeError(f"Sentinel Hub Statistical API błąd {r.status_code}: {r.text[:300]}")
     return parse_series(r.json(), n_px)
+
+
+SPIKE_DELTA = 0.35       # odstępstwo od mediany sąsiednich scen
+SPIKE_WINDOW_DAYS = 12   # okno sąsiadów po obu stronach
+
+
+def despike(rows: list) -> list:
+    """Odrzuca pojedyncze skoki W (niezamaskowany cień chmury albo mgiełka
+    zmienia całe pole na jeden dzień): punkt, który odstaje od mediany
+    sąsiadów z ±SPIKE_WINDOW_DAYS po OBU stronach o więcej niż SPIKE_DELTA.
+    Prawdziwa zmiana (deszcz, nawodnienie) utrzymuje się w kolejnych scenach
+    po jednej stronie, więc nie jest wycinana."""
+    import statistics
+    rows = sorted(rows, key=lambda r: r["obs_date"])
+    ds = [date.fromisoformat(r["obs_date"]) for r in rows]
+    out = []
+    for i, r in enumerate(rows):
+        before = [rows[j]["w"] for j in range(len(rows)) if 0 < (ds[i] - ds[j]).days <= SPIKE_WINDOW_DAYS]
+        after = [rows[j]["w"] for j in range(len(rows)) if 0 < (ds[j] - ds[i]).days <= SPIKE_WINDOW_DAYS]
+        if before and after:
+            ref = statistics.median(before + after)
+            side_b, side_a = statistics.median(before), statistics.median(after)
+            if abs(r["w"] - ref) > SPIKE_DELTA and abs(r["w"] - side_b) > SPIKE_DELTA \
+                    and abs(r["w"] - side_a) > SPIKE_DELTA:
+                continue
+        out.append(r)
+    return out
+
+
+def _median(stats: dict):
+    """p50 z bloku percentiles (Statistical API), a gdy go brak — średnia."""
+    pct = stats.get("percentiles") or {}
+    for k in ("50.0", "50", 50.0):
+        if pct.get(k) is not None:
+            return pct[k]
+    return stats["mean"]
 
 
 def parse_series(data: dict, n_px) -> list:
@@ -388,7 +433,7 @@ def parse_series(data: dict, n_px) -> list:
             st_w = o["w"]["bands"]["B0"]["stats"]
             st_n = o["ndvi"]["bands"]["B0"]["stats"]
             vf = valid_fraction(st_w, n_px)
-            w = float(st_w["mean"]) / 10000.0
+            w = float(_median(st_w)) / 10000.0
             nd = float(st_n["mean"]) / 10000.0
         except (KeyError, TypeError, ValueError):
             continue
@@ -435,26 +480,52 @@ def calibrate_field(field: dict, date_from: Optional[date] = None, date_to: Opti
            "warnings_json": json.dumps(warnings, ensure_ascii=False),
            "bins_json": json.dumps(p["bins"]), "scatter_json": json.dumps(scatter_sample(ndvi, strv))}
     db.save_optram_params(field["id"], row)
+    db.set_setting(_refresh_marker(field["id"]), date.today().isoformat())
     db.clear_optram_series(field["id"])
-    series = fetch_series(g_buf, date_from, date_to, row)
+    series = despike(fetch_series(g_buf, date_from, date_to, row))
     db.upsert_optram_series(field["id"], series)
     log.info(f"OPTRAM pole {field['id']}: {n_scenes} scen, {p['n_px']} px, jakość {quality}, "
              f"seria {len(series)} dat")
     return get_field_optram(field["id"])
 
 
-def update_recent(field: dict, days: int = 30) -> int:
-    """Dopisuje W z ostatnich `days` dni (scheduler). 0, gdy pole nie ma
-    kalibracji albo jest ona bezużyteczna."""
+REFRESH_MIN_INTERVAL_DAYS = 2   # scheduler co 48 h + „Sprawdź teraz” nie płacą dwa razy
+REFRESH_MAX_DAYS = 30
+
+
+def _refresh_marker(field_id: int) -> str:
+    return f"optram_refresh:{field_id}"
+
+
+def update_recent(field: dict, days: Optional[int] = None, force: bool = False) -> int:
+    """Dopisuje świeże W (scheduler, „Sprawdź teraz”). 0, gdy pole nie ma
+    kalibracji, jest ona bezużyteczna albo ostatnia próba była niedawno.
+    Okno: od ostatniej zapisanej sceny minus SPIKE_WINDOW_DAYS (sąsiedzi do
+    odrzucania skoków), najwyżej REFRESH_MAX_DAYS — audyt 11.2026: wcześniej
+    zawsze 30 dni przy każdym przebiegu."""
     import db
     p = db.get_optram_params(field["id"])
     if not p or p.get("quality") == "poor":
         return 0
-    _, g_buf = _field_geom(field)
     end = date.today()
+    last_try = db.get_setting(_refresh_marker(field["id"]))
+    if not force and last_try and (end - date.fromisoformat(last_try[:10])).days < REFRESH_MIN_INTERVAL_DAYS:
+        return 0
+    if days is None:
+        series = db.get_optram_series(field["id"])
+        days = REFRESH_MAX_DAYS if not series else min(REFRESH_MAX_DAYS, max(
+            SPIKE_WINDOW_DAYS + 2, (end - date.fromisoformat(series[-1]["obs_date"])).days + SPIKE_WINDOW_DAYS))
+    _, g_buf = _field_geom(field)
+    db.set_setting(_refresh_marker(field["id"]), end.isoformat())
+    # despike na połączonej historii (nowa scena musi mieć sąsiadów z obu stron,
+    # więc najświeższa wartość jest zapisywana, a weryfikowana przy kolejnym przebiegu)
     rows = fetch_series(g_buf, end - timedelta(days=days), end, p)
-    db.upsert_optram_series(field["id"], rows)
-    return len(rows)
+    merged = {r["obs_date"]: r for r in db.get_optram_series(field["id"])}
+    merged.update({r["obs_date"]: r for r in rows})
+    keep = {r["obs_date"] for r in despike(list(merged.values()))}
+    db.clear_optram_series(field["id"])
+    db.upsert_optram_series(field["id"], [r for d, r in sorted(merged.items()) if d in keep])
+    return len([r for r in rows if r["obs_date"] in keep])
 
 
 def era5_comparison(water_field_id: int, series: list) -> dict:
@@ -511,6 +582,11 @@ def optram_sentence(water_field_id: int, today: Optional[date] = None, series=No
     last = series[-1]
     if (today - date.fromisoformat(last["obs_date"])).days > SENTENCE_MAX_AGE_DAYS:
         return ""
+    era = era5_comparison(water_field_id, series)
+    if era["n"] >= ERA5_MIN_N and era["r"] is not None and era["r"] < ERA5_MIN_R:
+        # Test na żywo (pole deszczowe w PL): r = -0,43 — wynik nie trafia do
+        # werdyktu, zostaje tylko w panelu z ostrzeżeniem o słabej zgodności.
+        return ""
     msg = (f" Wilgotność wierzchniej warstwy z satelity (OPTRAM, {last['obs_date']}): "
            f"{last['w']:.2f} w skali 0–1 — {w_class(last['w'])}")
     vals = [s["w"] for s in series]
@@ -519,6 +595,8 @@ def optram_sentence(water_field_id: int, today: Optional[date] = None, series=No
     msg += "."
     if last["ndvi"] >= DENSE_CANOPY_NDVI:
         msg += " Przy zwartym łanie wskaźnik pokazuje raczej uwodnienie roślin niż gleby."
+    elif last["ndvi"] < BARE_SOIL_NDVI:
+        msg += " Na gołej glebie wynik zależy też od barwy i uprawy gleby."
     if p.get("quality") == "limited":
         msg += " (kalibracja trapezu o ograniczonej jakości)"
     return msg

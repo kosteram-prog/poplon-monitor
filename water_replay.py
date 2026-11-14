@@ -90,7 +90,10 @@ def _balance_by_date(field: dict, observations: list, events: list, weather_seri
     weather_series = [dict(w) for w in weather_series]
     wb.apply_rain_gauge(weather_series, db.get_rain_readings(field["id"]))
     kcb_max, p, _ = wb.crop_params(field.get("crop_type"))
-    taw = float(field.get("soil_taw_mm") or wb.DEFAULT_TAW_MM)
+    import soil_water
+    soil = soil_water.field_taw(field)
+    taw = float(soil["taw_mm"])
+    ks_salt = soil_water.field_salinity(field, texture=soil.get("texture"))["ks_salt"]
     ndvi_points = [(date.fromisoformat(o["obs_date"]), o["ndvi_mean"])
                    for o in observations if o.get("ndvi_mean") is not None]
     start = None
@@ -99,7 +102,8 @@ def _balance_by_date(field: dict, observations: list, events: list, weather_seri
             start = date.fromisoformat(field["sowing_date"])
         except ValueError:
             start = None
-    days = wb.run_balance(weather_series, ndvi_points, events, taw, p, kcb_max, start_date=start)
+    days = wb.run_balance(weather_series, ndvi_points, events, taw, p, kcb_max, start_date=start,
+                          soil_checks=db.get_soil_checks(field["id"]), ks_salt=ks_salt)
     out = {r["date"]: r for r in days}
     raw = p * taw
     for r in days:
